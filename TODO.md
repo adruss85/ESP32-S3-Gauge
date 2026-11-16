@@ -6,11 +6,12 @@ Open items for the gauge. Finished work lives in `include/version.h` and
 ## 1. Hardware and car
 
 - [ ] **Press the BOOT key on the real board.** It is now interrupt-driven
-      with a 200 ms cooldown; confirm quick taps change the scheme once and
-      log `[ui] accent <name>`. Console `b` is the fallback.
+      with a 200 ms cooldown and ISR flag fix; confirm quick taps change the
+      scheme once and log `[ui] accent <name>`. Console `b` is the fallback.
 - [ ] **Re-check the boost readout in motion.** The flush path now waits for
       `on_color_trans_done`, so DMA no longer reads a buffer LVGL is
-      overwriting. Confirm the digits no longer stretch during a sweep.
+      overwriting. 60-line tiles (6/frame) reduce rolling-shutter tearing.
+      Confirm digits no longer stretch during a sweep.
 - [ ] **In-car test.** Boot from the car, confirm boost follows the manifold
       (not just `0`/`--`) and IAT follows the intake sensor. Bench != car.
 - [ ] **Soak test** for at least an hour with ESP-NOW traffic and the display
@@ -20,6 +21,9 @@ Open items for the gauge. Finished work lives in `include/version.h` and
 
 ## 2. Firmware behaviour
 
+- [x] **Status bar semantics.** Red=never, green=streaming, orange=stale,
+      amber=IAT-only. Async WiFi scan no longer blocks main loop. BOOT key
+      ISR fix applied.
 - [ ] **Persist the accent scheme.** It currently resets to green on every
       boot. NVS would survive a power cycle, but adds a settings API; decide
       whether it is worth it.

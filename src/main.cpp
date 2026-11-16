@@ -101,14 +101,17 @@ void loop() {
   if ((uint32_t)(now - lastUi) >= 50) {
     lastUi = now;
     ohxnow::Telemetry t = ohxnow::telemetry();
+    ohxnow::Stats s = ohxnow::stats();
 #if GAUGE_CAPTURE
     // Fixed values so every snapshot exercises the full value row.
     t.statusValid = true;
     t.boostPsi = 18.4f;
     t.iatValid = true;
     t.iatC = 42.0f;
+    s.raw = 1;
+    s.statusPackets = 1;
 #endif
-    gauge_ui::update(t);
+    gauge_ui::update(t, s);
   }
 
 #if GAUGE_CAPTURE

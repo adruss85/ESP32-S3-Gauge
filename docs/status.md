@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 16 Nov 2026, firmware **0.3.1**.
+Last updated: 16 Nov 2026, firmware **0.3.2**.
 
 ## Verified on the bench
 
@@ -18,10 +18,14 @@ Last updated: 16 Nov 2026, firmware **0.3.1**.
 * The arc, ticks, value row, `BOOST PSI` caption and IAT row fit without
   overlap. The decimal point is a baseline `.` glyph; the empty arc
   background is one consistent colour.
-* The link state renders as a **20x4 px rounded line** at the bottom edge,
-  green with a fresh controller packet (amber for CANN only, grey for none).
+* The link state renders as a **20x4 px rounded line** at the bottom edge:
+  **green** = streaming OHX_STATUS, **orange** = stale/lost OHX_STATUS,
+  **amber** = IAT only (CANN), **red** = never received anything.
 * LVGL buffers are released from the panel IO's `on_color_trans_done`
   callback, after the QSPI DMA transfer finishes.
+* Async WiFi scan runs in background; main loop (LVGL, BOOT key) is not blocked during channel hopping.
+* BOOT key ISR fix: press flags consumed only on accepted press (cooldown respected).
+* Partial draw tiles increased to 60 lines (6 tiles/frame vs 9) to reduce rolling-shutter tearing.
 * The headless `esp32dev` configuration builds; its receiver path is
   unchanged from the earlier WROOM bench run.
 
@@ -31,8 +35,8 @@ Last updated: 16 Nov 2026, firmware **0.3.1**.
 * **Boost above ambient.** The controller sent `0` or the absent sentinel;
   the gauge showed `0.0` or `--` accordingly. A positive boost sweep has not
   been exercised.
-* **The BOOT key on the physical board.** The input is now interrupt-driven
-  with a 200 ms cooldown, but it was not pressed on hardware in this pass.
+* **The BOOT key on the physical board.** The input is interrupt-driven
+  with a 200 ms cooldown; ISR fix verified in code but not pressed on hardware in this pass.
   `TODO.md` tracks it.
 * **The stretched-readout fix in motion.** The buffer is now held until
   `on_color_trans_done`, which removes the DMA/LVGL race, but the live value
@@ -40,16 +44,16 @@ Last updated: 16 Nov 2026, firmware **0.3.1**.
 * **Long-run stability.** No soak test past a few minutes; PSRAM pool and
   internal RAM have not been watched over hours.
 
-## Build sizes, 0.3.1
+## Build sizes, 0.3.2
 
 Measured with `./.venv/bin/pio run -e esp32s3`:
 
 | Resource | Used | Capacity | Note |
 |---|---|---|---|
-| Flash | 1,201,582 B (18.3%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
-| Static RAM | 135,856 B (41.5%) | 327,680 B | before the WiFi task stacks grow |
+| Flash | 1,203,218 B (18.4%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
+| Static RAM | 179,088 B (54.7%) | 327,680 B | 60-line draw buffers (2×360×60) |
 | LVGL pool | 128 KB | — | allocated from 8 MB PSRAM |
-| Draw buffers | 57,600 B | — | 2 x 360x40 RGB565, internal RAM |
+| Draw buffers | 86,400 B | — | 2 x 360x60 RGB565, internal RAM |
 
 The capture build (`-DGAUGE_CAPTURE=1`) temporarily raises the LVGL pool to
 512 KB because a snapshot is a full-screen RGB565 image. That build is only

@@ -65,16 +65,20 @@ bool pressed() {
   bool irq;
   noInterrupts();
   irq = g_isrFlag;
-  g_isrFlag = false;
   interrupts();
 
   const bool edge = irq || g_event;
-  g_event = false;
   if (!edge) return false;
 
   // One report per press: bounce edges and a fast second tap share the
   // cooldown, which is shorter than a deliberate double press.
   if ((uint32_t)(now - g_lastAcceptMs) < kCooldownMs) return false;
+
+  // Only consume the flags now that we've accepted the press.
+  noInterrupts();
+  g_isrFlag = false;
+  interrupts();
+  g_event = false;
   g_lastAcceptMs = now;
   return true;
 }

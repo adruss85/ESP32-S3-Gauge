@@ -17,11 +17,13 @@
 #define COL_DIM lv_color_hex(0x7c8894)
 #define COL_LINE lv_color_hex(0x2c3138)
 
-// Link state: fresh OHX_STATUS, CANN only, or nothing. Independent of the
-// accent scheme, so the indicator still means the same thing in every colour.
+// Link state: fresh OHX_STATUS (green), stale/lost OHX_STATUS (orange),
+// CANN only / IAT only (amber), never received anything (red).
+// Independent of the accent scheme so the indicator means the same in every colour.
 #define COL_STATUS_OK lv_color_hex(0x22c55e)
-#define COL_STATUS_WARN lv_color_hex(0xf59e0b)
-#define COL_STATUS_IDLE lv_color_hex(0x4b5563)
+#define COL_STATUS_STALE lv_color_hex(0xfb923c)  // orange - had data, now stale
+#define COL_STATUS_WARN lv_color_hex(0xf59e0b)   // amber - IAT only
+#define COL_STATUS_IDLE lv_color_hex(0xef4444)   // red - never received anything
 
 // 56 px Montserrat Bold, digits + '.', copied from OpenHaldex-S3-Dash.
 LV_FONT_DECLARE(lv_font_dash_num_56);

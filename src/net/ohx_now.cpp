@@ -105,6 +105,10 @@ uint8_t g_printedChannel = 0;
 uint32_t g_lastScanMs = 0;
 bool g_anchorFound = false;
 
+// Async WiFi scan state machine
+enum class ScanState { Idle, Scanning, Processing };
+ScanState g_scanState = ScanState::Idle;
+
 uint32_t g_lastStatusPrintMs = 0;
 uint32_t g_printedStatusPackets = 0;
 bool g_printedFirstStatus = false;
@@ -401,17 +405,28 @@ void handleSerial() {
 
 // The family rule is that the channel comes from an AP, not a compiled-in
 // constant. The C6 is preferred because it is the boost source.
+// Async version: starts scan, returns immediately. Results processed in hopTick().
 void discoverChannel() {
-  const int n = WiFi.scanNetworks();
-  if (n <= 0) {
+  if (g_scanState != ScanState::Idle) return;  // scan already in progress
+
+  WiFi.scanNetworks(true);  // async mode
+  g_scanState = ScanState::Scanning;
+  Serial.println("[now] async scan started");
+}
+
+// Process async scan results when complete. Call from hopTick().
+void processScanResults() {
+  int n = WiFi.scanComplete();
+  if (n == -1) return;   // still scanning
+  if (n == -2) {         // scan failed or not started
     g_anchorFound = false;
     g_channel = config::kFallbackChannel;
-    Serial.printf("[now] scan failed (%d); fallback ch %u\n", n,
-                  (unsigned)g_channel);
-    WiFi.scanDelete();
+    Serial.printf("[now] scan failed; fallback ch %u\n", (unsigned)g_channel);
+    g_scanState = ScanState::Idle;
     return;
   }
 
+  // Scan complete, process results
   int c6 = -1, c6Rssi = -1000, dash = -1, dashRssi = -1000;
   for (int i = 0; i < n; i++) {
     const String ssid = WiFi.SSID(i);
@@ -440,11 +455,24 @@ void discoverChannel() {
                   (unsigned)g_channel);
   }
   WiFi.scanDelete();
+  g_scanState = ScanState::Idle;
 }
 
 void hopTick() {
   const uint32_t now = millis();
   const uint32_t last = g_lastAnyMs;
+
+  // Process async scan results if scanning
+  if (g_scanState == ScanState::Scanning) {
+    processScanResults();
+    if (g_scanState == ScanState::Idle) {
+      // Scan just completed, apply the channel
+      setChannel(g_channel);
+      g_hopChannel = g_channel;
+      g_hopMs = now;
+    }
+    return;  // don't do other hop logic while scan completes
+  }
 
   bool force = g_forceScan;
   if (force && (int32_t)(now - g_forceScanUntil) >= 0) {
@@ -478,11 +506,8 @@ void hopTick() {
   // answer and no hopping is needed. Otherwise walk 1..13.
   if ((uint32_t)(now - g_lastScanMs) >= config::kRescanMs) {
     g_lastScanMs = now;
-    discoverChannel();
-    setChannel(g_channel);
-    g_hopChannel = g_channel;
-    g_hopMs = now;
-    return;
+    discoverChannel();  // starts async scan
+    return;  // wait for next hopTick to process results
   }
 
   if (g_anchorFound) return;
@@ -540,6 +565,7 @@ bool begin() {
   WiFi.disconnect(false, false);
   WiFi.setSleep(false);
 
+  // Start async scan; we'll listen on fallback channel until it completes
   discoverChannel();
   setChannel(g_channel);
 
@@ -567,7 +593,7 @@ bool begin() {
   g_hopMs = millis();
   g_lastStatusPrintMs = millis();
   g_printedChannel = 0;
-  Serial.printf("[now] listening on channel %u\n", (unsigned)g_channel);
+  Serial.printf("[now] listening on channel %u (scan in progress)\n", (unsigned)g_channel);
   return true;
 }
 

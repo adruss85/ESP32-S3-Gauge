@@ -22,7 +22,7 @@
 namespace display {
 namespace {
 
-constexpr int kDrawLines = 40;  // partial draw buffer: 360 x 40 px
+constexpr int kDrawLines = 60;  // partial draw buffer: 360 x 60 px (6 tiles, less tearing)
 constexpr int kProbeHz = 5 * 1000 * 1000;
 
 esp_lcd_panel_handle_t g_panel = nullptr;

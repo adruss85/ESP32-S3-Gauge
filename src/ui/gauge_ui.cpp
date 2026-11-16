@@ -210,7 +210,7 @@ void create() {
   applyScheme();
 }
 
-void update(const ohxnow::Telemetry &t) {
+void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   if (!g_ready) return;
 
   static float shown = NAN;
@@ -270,14 +270,27 @@ void update(const ohxnow::Telemetry &t) {
     }
   }
 
-  const int status = t.statusValid ? 2 : (t.iatValid ? 1 : 0);
-  static int lastStatus = -1;
-  if (status != lastStatus) {
-    lastStatus = status;
-    const lv_color_t col = status == 2   ? COL_STATUS_OK
-                           : status == 1 ? COL_STATUS_WARN
-                                         : COL_STATUS_IDLE;
-    lv_obj_set_style_bg_color(g_status, col, 0);
+  // Status bar: red=never received, green=streaming, orange=stale, amber=IAT only
+  // Priority: never > streaming > stale > IAT-only > idle
+  lv_color_t statusColor;
+  if (s.raw == 0) {
+    statusColor = COL_STATUS_IDLE;  // red - never received anything
+  } else if (t.statusValid) {
+    statusColor = COL_STATUS_OK;    // green - fresh OHX_STATUS
+  } else if (s.statusPackets > 0) {
+    statusColor = COL_STATUS_STALE; // orange - had OHX_STATUS, now stale
+  } else if (t.iatValid) {
+    statusColor = COL_STATUS_WARN;  // amber - IAT only (fresh CANN)
+  } else if (s.canPackets > 0) {
+    statusColor = COL_STATUS_STALE; // orange - had CANN, now stale
+  } else {
+    statusColor = COL_STATUS_IDLE;  // red - packets received but no valid data (shouldn't happen)
+  }
+
+  static lv_color_t lastStatusColor = lv_color_hex(0xFFFFFFFF);  // invalid sentinel
+  if (!lv_color_eq(statusColor, lastStatusColor)) {
+    lastStatusColor = statusColor;
+    lv_obj_set_style_bg_color(g_status, statusColor, 0);
   }
 }
 
