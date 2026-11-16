@@ -2,6 +2,9 @@
 """Read the gauge serial console, pulsing RTS first so the boot log is included.
 
 Usage: python tools/monitor.py [PORT] [SECONDS]
+
+The display board is native USB CDC on /dev/ttyACM0; pass /dev/ttyUSB0 for
+the WROOM bench listener.
 """
 import sys
 import time
@@ -10,7 +13,7 @@ import serial
 
 
 def main() -> int:
-    port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB0"
+    port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
     seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 0  # 0 = forever
 
     ser = serial.Serial(port, 115200, timeout=0.2)

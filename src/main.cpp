@@ -13,19 +13,23 @@
 #if GAUGE_HAS_DISPLAY
 #include <lvgl.h>
 
+#include "hal/boot_button.h"
 #include "hal/display.h"
+#include "theme.h"
 #include "ui/gauge_ui.h"
 #endif
 
 #include "net/ohx_now.h"
 
 #if GAUGE_CAPTURE && GAUGE_HAS_DISPLAY
-// Verification aid: render the gauge with a fixed reading and stream the
-// 360x360 RGB565 framebuffer over the USB CDC port as raw bytes after a
-// one-line header. Never compiled into a normal build.
+// Verification aid: render the gauge with a fixed reading, once per colour
+// scheme, and stream each 360x360 RGB565 framebuffer over USB as raw bytes
+// after a one-line header. Never compiled into a normal build.
 namespace {
 
+uint8_t g_shotIndex = 0;
 bool g_captured = false;
+uint32_t g_lastShotMs = 0;
 
 void dumpSnapshot() {
   lv_draw_buf_t *buf =
@@ -38,8 +42,9 @@ void dumpSnapshot() {
   const uint32_t w = buf->header.w;
   const uint32_t h = buf->header.h;
   const uint32_t stride = buf->header.stride;
-  Serial.printf("[shot] %lu %lu %lu %lu\n", (unsigned long)w, (unsigned long)h,
-                (unsigned long)stride, (unsigned long)buf->data_size);
+  Serial.printf("[shot] %u %lu %lu %lu %lu\n", (unsigned)g_shotIndex,
+                (unsigned long)w, (unsigned long)h, (unsigned long)stride,
+                (unsigned long)buf->data_size);
   Serial.flush();
 
   const uint8_t *p = buf->data;
@@ -65,6 +70,8 @@ void setup() {
     Serial.println("[lcd] display init failed - continuing headless");
   } else {
     gauge_ui::create();
+    boot_button::begin();
+    Serial.printf("[ui] accent %s (BOOT key cycles)\n", theme::schemeName());
   }
 #endif
 
@@ -79,13 +86,15 @@ void loop() {
 #if GAUGE_HAS_DISPLAY
   display::loop();
 
+  if (boot_button::pressed()) gauge_ui::nextScheme();
+
   static uint32_t lastUi = 0;
   const uint32_t now = millis();
   if ((uint32_t)(now - lastUi) >= 50) {
     lastUi = now;
     ohxnow::Telemetry t = ohxnow::telemetry();
 #if GAUGE_CAPTURE
-    // Fixed values so the snapshot always exercises the full value row.
+    // Fixed values so every snapshot exercises the full value row.
     t.statusValid = true;
     t.boostPsi = 18.4f;
     t.iatValid = true;
@@ -95,9 +104,12 @@ void loop() {
   }
 
 #if GAUGE_CAPTURE
-  if (!g_captured && millis() > 6000) {
-    g_captured = true;
+  if (!g_captured && millis() > 6000 &&
+      (uint32_t)(now - g_lastShotMs) >= 400) {
+    g_lastShotMs = now;
+    gauge_ui::setScheme((theme::Scheme)g_shotIndex);
     dumpSnapshot();
+    if (++g_shotIndex >= (uint8_t)theme::Scheme::Count) g_captured = true;
   }
 #endif
 #endif

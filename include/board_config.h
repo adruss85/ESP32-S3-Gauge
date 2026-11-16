@@ -34,6 +34,11 @@
 #define LCD_BACKLIGHT_HZ 20000
 #define LCD_BACKLIGHT_BITS 10
 
+// BOOT button, active low. Holding it at reset still enters download mode;
+// after boot it is a plain user input.
+#define BOARD_PIN_BOOT 0
+#define BOARD_BOOT_DEBOUNCE_MS 30
+
 // ---------------------------------------------------- I2C control bus
 // TCA9554 I/O expander, RTC and IMU share this bus. The touch controller
 // has its own bus on GPIO1/3, which this gauge does not use.

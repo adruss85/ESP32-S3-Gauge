@@ -2,14 +2,20 @@
 // gauge_ui.cpp - the digital boost gauge
 //
 // Reference layout: a 270 degree arc with 0/5/10/15/20/25 PSI labels, a
-// large white boost value with a centred decimal dot, a green BOOST PSI
-// caption, and the intake-air temperature under a thin rule.
+// large white boost value with a decimal point on the baseline, a BOOST
+// PSI caption in the active accent, and the intake-air temperature under
+// a thin rule.
 //
-// The value is built from three flex items (integer, dot, fraction) so the
-// decimal point stays in the middle of the row at every width.
+// The value is built from three flex items (integer, dot, fraction) so it
+// stays centred at every width. The dot is a real '.' glyph from the same
+// font, not a circle, so it sits on the text baseline.
+//
+// The arc keeps one colour across the whole sweep; the BOOT key changes
+// that accent (green/orange/red/blue/white/purple).
 // =====================================================================
 #include "ui/gauge_ui.h"
 
+#include <Arduino.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -20,15 +26,20 @@ namespace {
 
 constexpr int kScaleMaxPsi = 25;
 constexpr int kArcRange = kScaleMaxPsi * 10;  // tenths of a PSI
-constexpr int kArcSize = 300;
-constexpr int kArcWidth = 14;
+
+// Outer radius 157 px, stroke 21 px: the inner edge stays at 136 px, the
+// same as the original 300 px / 14 px arc, so it grows outwards only.
+constexpr int kArcSize = 314;
+constexpr int kArcWidth = 21;
 
 lv_obj_t *g_arc = nullptr;
 lv_obj_t *g_whole = nullptr;
 lv_obj_t *g_dot = nullptr;
 lv_obj_t *g_frac = nullptr;
+lv_obj_t *g_unit = nullptr;
 lv_obj_t *g_iat = nullptr;
-lv_obj_t *g_link = nullptr;
+lv_obj_t *g_iatCap = nullptr;
+lv_obj_t *g_ticks[6] = {};
 bool g_ready = false;
 
 struct Tick {
@@ -51,7 +62,20 @@ void plain(lv_obj_t *obj) {
   lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE);
 }
 
+void applyScheme() {
+  if (!g_ready) return;
+
+  const lv_color_t accent = theme::accent();
+  lv_obj_set_style_arc_color(g_arc, accent, LV_PART_INDICATOR);
+  lv_obj_set_style_text_color(g_unit, accent, 0);
+  for (lv_obj_t *tick : g_ticks) {
+    if (tick != nullptr) lv_obj_set_style_text_color(tick, accent, 0);
+  }
+  lv_obj_set_style_text_color(g_iatCap, accent, 0);
+}
+
 void addTicks(lv_obj_t *scr) {
+  size_t i = 0;
   for (const Tick &t : kTicks) {
     lv_obj_t *box = lv_obj_create(scr);
     lv_obj_set_size(box, 40, 22);
@@ -62,7 +86,11 @@ void addTicks(lv_obj_t *scr) {
     lv_label_set_text(label, t.text);
     lv_obj_set_style_text_font(label, FONT_SMALL, 0);
     lv_obj_set_style_text_color(label, COL_DIM, 0);
+    lv_obj_set_style_text_opa(label, LV_OPA_60, 0);
     lv_obj_center(label);
+
+    if (i < sizeof(g_ticks) / sizeof(g_ticks[0])) g_ticks[i] = label;
+    i++;
   }
 }
 
@@ -83,16 +111,12 @@ void addValueRow(lv_obj_t *scr) {
   lv_obj_set_style_text_font(g_whole, FONT_VALUE, 0);
   lv_obj_set_style_text_color(g_whole, COL_FG, 0);
 
-  g_dot = lv_obj_create(row);
-  lv_obj_set_size(g_dot, 12, 12);
-  lv_obj_set_style_radius(g_dot, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(g_dot, COL_FG, 0);
-  lv_obj_set_style_bg_opa(g_dot, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(g_dot, 0, 0);
-  lv_obj_set_style_pad_all(g_dot, 0, 0);
-  lv_obj_set_style_margin_left(g_dot, 5, 0);
-  lv_obj_set_style_margin_right(g_dot, 5, 0);
-  lv_obj_remove_flag(g_dot, LV_OBJ_FLAG_SCROLLABLE);
+  // A real period glyph shares the digits' baseline, so it lands at the
+  // bottom of the value instead of floating in the middle.
+  g_dot = lv_label_create(row);
+  lv_label_set_text(g_dot, ".");
+  lv_obj_set_style_text_font(g_dot, FONT_VALUE, 0);
+  lv_obj_set_style_text_color(g_dot, COL_FG, 0);
 
   g_frac = lv_label_create(row);
   lv_label_set_text(g_frac, "0");
@@ -136,18 +160,18 @@ void create() {
   lv_obj_set_style_arc_rounded(g_arc, true, LV_PART_MAIN);
 
   lv_obj_set_style_arc_width(g_arc, kArcWidth, LV_PART_INDICATOR);
-  lv_obj_set_style_arc_color(g_arc, COL_GREEN, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(g_arc, theme::accent(), LV_PART_INDICATOR);
   lv_obj_set_style_arc_rounded(g_arc, true, LV_PART_INDICATOR);
 
   addTicks(scr);
   addValueRow(scr);
 
-  lv_obj_t *unit = lv_label_create(scr);
-  lv_label_set_text(unit, "BOOST PSI");
-  lv_obj_set_style_text_font(unit, FONT_LABEL, 0);
-  lv_obj_set_style_text_color(unit, COL_GREEN, 0);
-  lv_obj_set_style_text_letter_space(unit, 4, 0);
-  lv_obj_align(unit, LV_ALIGN_TOP_MID, 0, 190);
+  g_unit = lv_label_create(scr);
+  lv_label_set_text(g_unit, "BOOST PSI");
+  lv_obj_set_style_text_font(g_unit, FONT_LABEL, 0);
+  lv_obj_set_style_text_color(g_unit, theme::accent(), 0);
+  lv_obj_set_style_text_letter_space(g_unit, 4, 0);
+  lv_obj_align(g_unit, LV_ALIGN_TOP_MID, 0, 190);
 
   lv_obj_t *rule = lv_obj_create(scr);
   lv_obj_set_size(rule, 130, 1);
@@ -157,11 +181,12 @@ void create() {
   lv_obj_set_style_border_width(rule, 0, 0);
   lv_obj_remove_flag(rule, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t *iatCap = lv_label_create(scr);
-  lv_label_set_text(iatCap, "IAT");
-  lv_obj_set_style_text_font(iatCap, FONT_SMALL, 0);
-  lv_obj_set_style_text_color(iatCap, COL_DIM, 0);
-  lv_obj_align(iatCap, LV_ALIGN_TOP_MID, 0, 220);
+  g_iatCap = lv_label_create(scr);
+  lv_label_set_text(g_iatCap, "IAT");
+  lv_obj_set_style_text_font(g_iatCap, FONT_SMALL, 0);
+  lv_obj_set_style_text_color(g_iatCap, theme::accent(), 0);
+  lv_obj_set_style_text_opa(g_iatCap, LV_OPA_60, 0);
+  lv_obj_align(g_iatCap, LV_ALIGN_TOP_MID, 0, 220);
 
   g_iat = lv_label_create(scr);
   lv_label_set_text(g_iat, "--");
@@ -169,18 +194,8 @@ void create() {
   lv_obj_set_style_text_color(g_iat, COL_FG, 0);
   lv_obj_align(g_iat, LV_ALIGN_TOP_MID, 0, 242);
 
-  // Subtle link lamp: green with a fresh controller packet, amber with only
-  // CAN data, grey with nothing.
-  g_link = lv_obj_create(scr);
-  lv_obj_set_size(g_link, 7, 7);
-  lv_obj_set_style_radius(g_link, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(g_link, COL_DIM, 0);
-  lv_obj_set_style_bg_opa(g_link, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(g_link, 0, 0);
-  lv_obj_remove_flag(g_link, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_align(g_link, LV_ALIGN_BOTTOM_MID, 0, -20);
-
   g_ready = true;
+  applyScheme();
 }
 
 void update(const ohxnow::Telemetry &t) {
@@ -216,9 +231,6 @@ void update(const ohxnow::Telemetry &t) {
     lv_label_set_text(g_frac, buf);
 
     lv_arc_set_value(g_arc, tenths > kArcRange ? kArcRange : tenths);
-    const lv_color_t col =
-        shown >= 22.0f ? COL_RED : (shown >= 16.0f ? COL_AMBER : COL_GREEN);
-    lv_obj_set_style_arc_color(g_arc, col, LV_PART_INDICATOR);
   }
 
   if (t.iatValid && !isnan(t.iatC)) {
@@ -228,14 +240,17 @@ void update(const ohxnow::Telemetry &t) {
   } else {
     lv_label_set_text(g_iat, "--");
   }
+}
 
-  lv_color_t link = COL_DIM;
-  if (t.statusValid) {
-    link = COL_GREEN;
-  } else if (t.iatValid) {
-    link = COL_AMBER;
-  }
-  lv_obj_set_style_bg_color(g_link, link, 0);
+void nextScheme() {
+  theme::nextScheme();
+  applyScheme();
+  Serial.printf("[ui] accent %s\n", theme::schemeName());
+}
+
+void setScheme(theme::Scheme s) {
+  theme::setScheme(s);
+  applyScheme();
 }
 
 }  // namespace gauge_ui

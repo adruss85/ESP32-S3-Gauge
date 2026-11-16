@@ -1,9 +1,11 @@
 #pragma once
 #include <stdint.h>
 
+#include "version.h"
+
 namespace config {
 
-inline constexpr char kVersion[] = "0.2.0-gauge";
+inline constexpr char kVersion[] = OHX_GAUGE_VERSION;
 
 // The family fallback channel (bodycan uses the same one when no AP is up).
 inline constexpr uint8_t kFallbackChannel = 1;

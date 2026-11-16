@@ -1,70 +1,80 @@
 # ESP32-S3-Gauge
 
-Digital boost gauge for a **Waveshare ESP32-S3-LCD-1.85** (360×360 round
-ST77916 panel). Boost comes from the OpenHaldex controller's `OHX_STATUS`
-broadcast; intake air temperature is decoded from `Engine_3` (`0x380`) in the
-CANN relay.
+A standalone **digital boost gauge** for the
+**[OpenHaldex](https://github.com/Forbes-Automotive/OpenHaldex-C6)** Haldex
+controller, running on a **Waveshare ESP32-S3-LCD-1.85** (360x360 round IPS
+panel, ST77916 over QSPI).
 
-The plain ESP32-WROOM build (`env:esp32dev`) stays as a headless CANN
-listener for bench work.
+The gauge is **receive-only**. It listens for the controller's `OHX_STATUS`
+ESP-NOW broadcast for boost (and rpm/speed/throttle/mode), and decodes intake
+air temperature from `Engine_3` (`0x380`) in the CANN relay. It never
+transmits, never touches the car's CAN bus, and the controller firmware is
+not modified.
+
+> This repository is AI-generated and human-tested on one board. It is not
+> security-audited. Read the code before you flash it.
+
+![The gauge in the green scheme](assets/gauge-preview.png)
+
+## What it shows
+
+- 270-degree arc, `0 / 5 / 10 / 15 / 20 / 25` PSI, one consistent accent
+  colour across the whole sweep (no warning colours).
+- Large white boost value with the decimal point on the text baseline.
+- `BOOST PSI` caption, and the intake air temperature under a thin rule.
+- Six accent schemes: **green, orange, red, blue, white, purple**. Press the
+  board's **BOOT** key (GPIO0) to step through them. Each press logs
+  `[ui] accent <name>` on the console.
+- Unknown values draw `--`, never a fake zero. A genuine `0` draws `0`.
+
+![All six accent schemes](assets/gauge-schemes.png)
 
 ## Hardware
 
-- Display target: Waveshare ESP32-S3-LCD-1.85, ESP32-S3R8, 16 MB flash,
-  8 MB OPI PSRAM (`env:esp32s3`)
-- Bench proxy: plain ESP32-WROOM devkit (`env:esp32dev`)
-- Sender: the ESP32-bodycan device / OpenHaldex-C6, broadcasting CANN and
-  `OHX_STATUS` on its WiFi channel
+| Piece | Notes |
+|---|---|
+| Display board | Waveshare ESP32-S3-LCD-1.85, ESP32-S3R8, 16 MB flash, 8 MB OPI PSRAM |
+| Panel | 360x360 ST77916, QSPI, vendor init sequence when ID reads `00 02 7F 7F` |
+| LCD reset | TCA9554 I/O expander at `0x20`, bit 1 (I2C SDA 11 / SCL 10) |
+| Backlight | GPIO5, LEDC PWM |
+| BOOT key | GPIO0, active low, internal pull-up |
+| Bench listener | Plain ESP32-WROOM devkit (`env:esp32dev`) |
 
-The display is driven with Waveshare's vendor ST77916 QSPI driver. LVGL 9.3
-runs with its pool in PSRAM, and the gauge uses the Montserrat faces from
-`OpenHaldex-S3-Dash` (56 px for the boost value).
+Touch is wired on a separate bus (GPIO1/3) and is not used.
 
-## Build / flash
+## Build and flash
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/pip install platformio pyserial esptool
+./.venv/bin/pip install platformio pyserial
 
-# Display board (native USB CDC, /dev/ttyACM0)
+# Display board, native USB CDC on /dev/ttyACM0
 ./.venv/bin/pio run -e esp32s3
 ./.venv/bin/pio run -e esp32s3 -t upload --upload-port /dev/ttyACM0
 
-# WROOM bench listener (CH340, /dev/ttyUSB0)
+# Headless WROOM CANN listener, CH340 on /dev/ttyUSB0
 ./.venv/bin/pio run -e esp32dev
 ./.venv/bin/pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
 ```
 
+Build sizes for the current version are recorded in
+[`docs/status.md`](docs/status.md).
+
 ## Monitor
-
-```bash
-./.venv/bin/pio device monitor -p /dev/ttyACM0 -b 115200
-```
-
-Non-interactive (also pulses RTS to capture the boot log):
 
 ```bash
 ./.venv/bin/python tools/monitor.py /dev/ttyACM0
 ```
 
-Serial commands while it is running:
+Console keys while it is running:
 
-- `i` — print raw/packet/frame/reject counters
+- `i` — raw/packet/frame/reject counters and the current channel
 - `s` or `r` — force a channel scan
 
-## Gauge layout
-
-- 270° arc, 0–25 PSI, green below 16 PSI, amber above, red above 22
-- Large white boost value with a centred decimal dot
-- `BOOST PSI` caption, `IAT` readout under a thin rule
-- Link lamp: green for fresh `OHX_STATUS`, amber for CANN only, grey for none
-
-Absent values are drawn as `--`, never as zero.
-
-## What good output looks like
+A healthy link looks like:
 
 ```text
-ESP32-S3-Gauge 0.2.0-gauge
+ESP32-S3-Gauge 0.3.0
 [gauge] boost from OHX_STATUS, IAT from Engine_3 (0x380)
 [lcd] panel id: 00 02 7F 7F
 [lcd] using vendor init sequence
@@ -76,5 +86,55 @@ ESP32-S3-Gauge 0.2.0-gauge
 ```
 
 The receiver starts on the family fallback channel 1, scans for the
-`OpenHaldex-C6` or `ohx-dash` AP, and hops through 1..13 only if it has been
-quiet. Once packets arrive it locks to their channel.
+`OpenHaldex-C6` AP first and `ohx-dash` second, and hops through 1..13 only
+while it has been quiet.
+
+## Capturing the glass
+
+Layout and colour changes can be checked without a camera. The capture build
+renders one frame per scheme and streams each 360x360 RGB565 framebuffer over
+USB:
+
+```bash
+PLATFORMIO_BUILD_FLAGS="-DGAUGE_CAPTURE=1" \
+  ./.venv/bin/pio run -e esp32s3 -t upload --upload-port /dev/ttyACM0
+./.venv/bin/python tools/capture_frame.py /dev/ttyACM0 /tmp/gauge
+```
+
+This writes `gauge_<n>_<scheme>.ppm`. The capture code and its 512 KB LVGL
+pool are compiled out of normal firmware.
+
+## Repository layout
+
+```text
+include/     board pins, LVGL config, theme, version, shared wire headers
+src/hal/     QSPI panel, TCA9554 reset, BOOT key
+src/net/     ESP-NOW receive, channel discovery, IAT decode
+src/ui/      gauge layout, accent schemes, value font
+tools/       serial monitor, framebuffer capture
+docs/        status and verification notes
+AGENTS.md    guidance for AI coding agents
+TODO.md      open hardware and firmware items
+```
+
+## Verification and status
+
+- [`docs/status.md`](docs/status.md) — what was measured on the bench, what is
+  still unverified, and the current build size.
+- [`TODO.md`](TODO.md) — open items, including the first in-car test and the
+  physical BOOT-key check.
+- [`AGENTS.md`](AGENTS.md) — conventions, hard rules and where to change what.
+
+## Credits
+
+The controller, its CAN decoding and the ESP-NOW protocol are the work of
+**[Forbes Automotive](https://github.com/Forbes-Automotive/OpenHaldex-C6)**.
+`include/ohx_proto.h` and `include/cannow_proto.h` are verbatim copies of the
+shared wire-format headers; refresh them from upstream, never hand-edit them.
+
+The 56 px Montserrat Bold subset is reused from
+[`OpenHaldex-S3-Dash`](https://github.com/adruss85/OpenHaldex-S3-Dash).
+
+## Licence
+
+GPL-3.0-or-later. See [`LICENSE`](LICENSE).
