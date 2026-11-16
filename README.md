@@ -23,8 +23,11 @@ not modified.
 - Large white boost value with the decimal point on the text baseline.
 - `BOOST PSI` caption, and the intake air temperature under a thin rule.
 - Six accent schemes: **green, orange, red, blue, white, purple**. Press the
-  board's **BOOT** key (GPIO0) to step through them. Each press logs
-  `[ui] accent <name>` on the console.
+  board's **BOOT** key (GPIO0) to step through them. The key is
+  interrupt-driven, so quick taps land even while the arc is repainting.
+  Each press logs `[ui] accent <name>` on the console.
+- A **20x4 px link line** at the bottom edge: green when `OHX_STATUS` is
+  fresh, amber when only CANN is arriving, grey when nothing is.
 - Unknown values draw `--`, never a fake zero. A genuine `0` draws `0`.
 
 ![All six accent schemes](assets/gauge-schemes.png)
@@ -70,11 +73,12 @@ Console keys while it is running:
 
 - `i` — raw/packet/frame/reject counters and the current channel
 - `s` or `r` — force a channel scan
+- `b` — step the accent scheme (same action as the BOOT key)
 
 A healthy link looks like:
 
 ```text
-ESP32-S3-Gauge 0.3.0
+ESP32-S3-Gauge 0.3.1
 [gauge] boost from OHX_STATUS, IAT from Engine_3 (0x380)
 [lcd] panel id: 00 02 7F 7F
 [lcd] using vendor init sequence

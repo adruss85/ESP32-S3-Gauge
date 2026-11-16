@@ -28,8 +28,21 @@ constexpr int kProbeHz = 5 * 1000 * 1000;
 esp_lcd_panel_handle_t g_panel = nullptr;
 lv_display_t *g_disp = nullptr;
 bool g_ready = false;
+volatile uint32_t g_flushDone = 0;
+bool g_firstFlushLogged = false;
 
 uint32_t tickCb() { return (uint32_t)millis(); }
+
+// The SPI panel IO queues the transfer and returns immediately: the buffer
+// is still being read by DMA. LVGL must not reuse it until this callback
+// fires, or the next render lands in a buffer that is halfway out of the
+// panel and the readout looks stretched (rolling-shutter tearing).
+bool IRAM_ATTR onColorDone(esp_lcd_panel_io_handle_t,
+                           esp_lcd_panel_io_event_data_t *, void *) {
+  g_flushDone++;
+  if (g_disp != nullptr) lv_display_flush_ready(g_disp);
+  return false;
+}
 
 void flushCb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   const int32_t w = area->x2 - area->x1 + 1;
@@ -55,9 +68,9 @@ void flushCb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
       warned = true;
       Serial.println("[lcd] draw_bitmap failed");
     }
+    // No transfer will complete, so release the buffer now.
+    lv_display_flush_ready(disp);
   }
-
-  lv_display_flush_ready(disp);
 }
 
 bool initBusAndPanel() {
@@ -85,6 +98,8 @@ bool initBusAndPanel() {
   ioCfg.lcd_cmd_bits = 32;
   ioCfg.lcd_param_bits = 8;
   ioCfg.flags.quad_mode = true;
+  ioCfg.on_color_trans_done = onColorDone;
+  ioCfg.user_ctx = nullptr;
 
   // Probe the panel's identification register. Waveshare's demo uses the
   // answer to choose between two init sequences; a failed read falls back
@@ -199,6 +214,13 @@ bool begin() {
 
 void loop() {
   if (!g_ready) return;
+
+  if (!g_firstFlushLogged && g_flushDone > 0) {
+    g_firstFlushLogged = true;
+    Serial.printf("[lcd] DMA flush callback live (%lu transfers)\n",
+                  (unsigned long)g_flushDone);
+  }
+
   lv_timer_handler();
 }
 

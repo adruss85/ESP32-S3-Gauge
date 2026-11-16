@@ -81,6 +81,14 @@ void setup() {
 }
 
 void loop() {
+#if GAUGE_HAS_DISPLAY
+  // Console fallback for the accent cycle, same action as the BOOT key.
+  if (Serial.available() > 0 && Serial.peek() == 'b') {
+    Serial.read();
+    gauge_ui::nextScheme();
+  }
+#endif
+
   ohxnow::poll();
 
 #if GAUGE_HAS_DISPLAY

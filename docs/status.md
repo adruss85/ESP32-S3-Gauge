@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 16 Nov 2026, firmware **0.3.0**.
+Last updated: 16 Nov 2026, firmware **0.3.1**.
 
 ## Verified on the bench
 
@@ -18,6 +18,10 @@ Last updated: 16 Nov 2026, firmware **0.3.0**.
 * The arc, ticks, value row, `BOOST PSI` caption and IAT row fit without
   overlap. The decimal point is a baseline `.` glyph; the empty arc
   background is one consistent colour.
+* The link state renders as a **20x4 px rounded line** at the bottom edge,
+  green with a fresh controller packet (amber for CANN only, grey for none).
+* LVGL buffers are released from the panel IO's `on_color_trans_done`
+  callback, after the QSPI DMA transfer finishes.
 * The headless `esp32dev` configuration builds; its receiver path is
   unchanged from the earlier WROOM bench run.
 
@@ -27,20 +31,23 @@ Last updated: 16 Nov 2026, firmware **0.3.0**.
 * **Boost above ambient.** The controller sent `0` or the absent sentinel;
   the gauge showed `0.0` or `--` accordingly. A positive boost sweep has not
   been exercised.
-* **The BOOT key on the physical board.** The GPIO0 input, debounce and
-  six-scheme cycle build and the schemes render, but the key was not pressed
-  on hardware in this pass. `TODO.md` tracks it.
+* **The BOOT key on the physical board.** The input is now interrupt-driven
+  with a 200 ms cooldown, but it was not pressed on hardware in this pass.
+  `TODO.md` tracks it.
+* **The stretched-readout fix in motion.** The buffer is now held until
+  `on_color_trans_done`, which removes the DMA/LVGL race, but the live value
+  sweep has not been re-observed on the glass by the agent.
 * **Long-run stability.** No soak test past a few minutes; PSRAM pool and
   internal RAM have not been watched over hours.
 
-## Build sizes, 0.3.0
+## Build sizes, 0.3.1
 
 Measured with `./.venv/bin/pio run -e esp32s3`:
 
 | Resource | Used | Capacity | Note |
 |---|---|---|---|
-| Flash | 1,198,418 B (18.3%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
-| Static RAM | 135,240 B (41.3%) | 327,680 B | before the WiFi task stacks grow |
+| Flash | 1,201,582 B (18.3%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
+| Static RAM | 135,856 B (41.5%) | 327,680 B | before the WiFi task stacks grow |
 | LVGL pool | 128 KB | — | allocated from 8 MB PSRAM |
 | Draw buffers | 57,600 B | — | 2 x 360x40 RGB565, internal RAM |
 

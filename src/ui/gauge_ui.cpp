@@ -39,6 +39,7 @@ lv_obj_t *g_frac = nullptr;
 lv_obj_t *g_unit = nullptr;
 lv_obj_t *g_iat = nullptr;
 lv_obj_t *g_iatCap = nullptr;
+lv_obj_t *g_status = nullptr;
 lv_obj_t *g_ticks[6] = {};
 bool g_ready = false;
 
@@ -194,6 +195,17 @@ void create() {
   lv_obj_set_style_text_color(g_iat, COL_FG, 0);
   lv_obj_align(g_iat, LV_ALIGN_TOP_MID, 0, 242);
 
+  // Link state as a small line at the bottom edge: a few pixels tall, wide
+  // enough to read at a glance without becoming a lamp.
+  g_status = lv_obj_create(scr);
+  lv_obj_set_size(g_status, 20, 4);
+  lv_obj_set_style_radius(g_status, 2, 0);
+  lv_obj_set_style_bg_color(g_status, COL_STATUS_IDLE, 0);
+  lv_obj_set_style_bg_opa(g_status, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(g_status, 0, 0);
+  lv_obj_remove_flag(g_status, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_align(g_status, LV_ALIGN_BOTTOM_MID, 0, -18);
+
   g_ready = true;
   applyScheme();
 }
@@ -212,33 +224,60 @@ void update(const ohxnow::Telemetry &t) {
     shown += (target - shown) * 0.30f;
   }
 
-  if (isnan(shown)) {
-    lv_label_set_text(g_whole, "--");
-    lv_obj_add_flag(g_dot, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(g_frac, LV_OBJ_FLAG_HIDDEN);
-    lv_arc_set_value(g_arc, 0);
-  } else {
-    lv_obj_remove_flag(g_dot, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(g_frac, LV_OBJ_FLAG_HIDDEN);
-
-    int tenths = (int)(shown * 10.0f + 0.5f);
+  // Only touch the widgets when the rounded value changes. The smoothing
+  // loop runs at 20 Hz, but repainting the 314 px arc on every iteration
+  // is what made the loop sluggish and the value look unsettled.
+  int tenths = -1;
+  if (!isnan(shown)) {
+    tenths = (int)(shown * 10.0f + 0.5f);
     if (tenths < 0) tenths = 0;
-
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", tenths / 10);
-    lv_label_set_text(g_whole, buf);
-    snprintf(buf, sizeof(buf), "%d", tenths % 10);
-    lv_label_set_text(g_frac, buf);
-
-    lv_arc_set_value(g_arc, tenths > kArcRange ? kArcRange : tenths);
   }
 
-  if (t.iatValid && !isnan(t.iatC)) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%.0f°C", (double)t.iatC);
-    lv_label_set_text(g_iat, buf);
-  } else {
-    lv_label_set_text(g_iat, "--");
+  static int lastTenths = -2;
+  if (tenths != lastTenths) {
+    lastTenths = tenths;
+    if (tenths < 0) {
+      lv_label_set_text(g_whole, "--");
+      lv_obj_add_flag(g_dot, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(g_frac, LV_OBJ_FLAG_HIDDEN);
+      lv_arc_set_value(g_arc, 0);
+    } else {
+      lv_obj_remove_flag(g_dot, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(g_frac, LV_OBJ_FLAG_HIDDEN);
+
+      char buf[8];
+      snprintf(buf, sizeof(buf), "%d", tenths / 10);
+      lv_label_set_text(g_whole, buf);
+      snprintf(buf, sizeof(buf), "%d", tenths % 10);
+      lv_label_set_text(g_frac, buf);
+      lv_arc_set_value(g_arc, tenths > kArcRange ? kArcRange : tenths);
+    }
+  }
+
+  const bool iatOk = t.iatValid && !isnan(t.iatC);
+  const int iat = iatOk ? (int)lroundf(t.iatC) : 0;
+  static bool lastIatOk = false;
+  static int lastIat = 0;
+  if (iatOk != lastIatOk || (iatOk && iat != lastIat)) {
+    lastIatOk = iatOk;
+    lastIat = iat;
+    if (iatOk) {
+      char buf[16];
+      snprintf(buf, sizeof(buf), "%d°C", iat);
+      lv_label_set_text(g_iat, buf);
+    } else {
+      lv_label_set_text(g_iat, "--");
+    }
+  }
+
+  const int status = t.statusValid ? 2 : (t.iatValid ? 1 : 0);
+  static int lastStatus = -1;
+  if (status != lastStatus) {
+    lastStatus = status;
+    const lv_color_t col = status == 2   ? COL_STATUS_OK
+                           : status == 1 ? COL_STATUS_WARN
+                                         : COL_STATUS_IDLE;
+    lv_obj_set_style_bg_color(g_status, col, 0);
   }
 }
 

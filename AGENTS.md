@@ -101,13 +101,18 @@ The capture code is compiled out of normal builds.
 9. **Honesty about verification.** Bench != car. Boost has only been seen as
    `0` or the absent sentinel; IAT has only been seen on the bench with a
    CANN sender present. Do not describe those as verified in a car.
+10. **The QSPI panel IO is asynchronous.** `lv_display_flush_ready()` belongs
+    in `on_color_trans_done`, not at the end of the flush callback. Releasing
+    the buffer early lets DMA read it while LVGL renders into it, which shows
+    up as stretched/ghosted digits. If you change the flush path, keep the
+    callback wired.
 
 ## Budgets: do not regress these
 
 | Resource | Limit / baseline | Why it matters |
 |---|---|---|
-| App flash | OTA slot is **6,553,600 B** (0x640000). 0.3.0 used **1,198,418 B (18.3%)** | Two OTA slots plus SPIFFS share 16 MB; re-measure after your change |
-| Internal RAM | **135,240 B (41.3%)** static at 0.3.0 | WiFi/ESP-NOW stacks and DMA buffers need the rest |
+| App flash | OTA slot is **6,553,600 B** (0x640000). 0.3.1 used **1,201,582 B (18.3%)** | Two OTA slots plus SPIFFS share 16 MB; re-measure after your change |
+| Internal RAM | **135,856 B (41.5%)** static at 0.3.1 | WiFi/ESP-NOW stacks and DMA buffers need the rest |
 | LVGL pool | **128 KB** (`LV_MEM_SIZE`), allocated from PSRAM | Keep the pool out of internal RAM |
 | Draw buffers | 2 x 360x40 RGB565 = **57,600 B** in internal RAM | Partial render mode; both must be `LV_DRAW_BUF_ALIGN` aligned |
 | QSPI clock | 80 MHz | The vendor panel sequence assumes it |
@@ -121,7 +126,7 @@ anti-aliased shape; do not add scrolling containers.
 | Task | Touch |
 |---|---|
 | Gauge layout, value row, ticks | `src/ui/gauge_ui.cpp`, geometry in `include/theme.h` |
-| Accent schemes / BOOT cycle | `src/ui/theme.cpp`, `src/hal/boot_button.cpp` |
+| Accent schemes / BOOT cycle | `src/ui/theme.cpp`, `src/hal/boot_button.cpp` (GPIO interrupt + poll fallback) |
 | Panel, QSPI, LVGL display | `src/hal/display.cpp`; vendor driver `esp_lcd_st77916.c`, sequence `st77916_init.c` |
 | LCD reset expander | `src/hal/tca9554.cpp` (TCA9554 bit 1) |
 | ESP-NOW receive, channel scan | `src/net/ohx_now.cpp` |
