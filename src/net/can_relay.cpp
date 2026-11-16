@@ -1,0 +1,366 @@
+// =====================================================================
+// can_relay.cpp - see can_relay.h.
+// =====================================================================
+#include "net/can_relay.h"
+
+#include <Arduino.h>
+#include <string.h>
+
+#include "app/ram.h"
+#include "cannow_proto.h"
+#include "net/chassis.h"
+#include "net/dbc.h"
+
+// One entry for each possible 11-bit CAN id, in the table g_slotOf11Bit.
+#define SLOT_LOOKUP_ENTRIES 2048
+
+namespace canrelay {
+namespace {
+
+// Relay packets stop arriving when the setting is off or the bus goes quiet, and
+// this is what the "is the relay carrying the car" decisions go by.
+constexpr uint32_t kFreshMs = 1000;
+constexpr int kMaxExtended = 16;  // 29-bit ids are rare on these cars
+
+struct Slot {
+  uint32_t id;
+  uint32_t count;
+  uint32_t countLastSecond;
+  uint32_t lastMs;
+  uint16_t perSec;
+  uint8_t length;
+  bool extended;
+  uint8_t data[8];
+};
+
+// Written by the WiFi task, read by the main loop and the network task, so every
+// access goes through this lock. It is held for microseconds at a time.
+portMUX_TYPE g_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// Both tables below are made in PSRAM by begin(), which keeps 7.6 KB out of internal
+// RAM on every car, relay or no relay. They are read and written like normal arrays.
+// Touching PSRAM inside the lock is fine: this runs in tasks, never in an interrupt
+// that has to keep going during a flash write.
+Slot *g_slots = nullptr;  // kMaxFrames entries
+int g_used = 0;
+// Which slot holds an 11-bit id: 0 = none yet, otherwise slot + 1. Looked up for
+// every frame, so it is a direct index, not a search. kMaxFrames must stay under 255.
+uint8_t *g_slotOf11Bit = nullptr;  // SLOT_LOOKUP_ENTRIES entries
+bool g_tablesReady = false;        // true once both tables exist
+uint8_t g_extendedSlots[kMaxExtended];
+int g_extendedCount = 0;
+
+Stats g_stats = {};
+uint32_t g_lastPacketMs = 0;
+
+// Sequence tracking per source MAC, so two senders interleaving on the same
+// channel do not read as phantom losses (the body-CAN box is a second sender
+// besides the controller). Beyond the cap every sender folds into slot 0, as
+// ohx_now does for status senders: the counters stay plausible, the oldest
+// sender's gaps stop being counted.
+constexpr int kMaxRelaySenders = 8;
+constexpr uint32_t kSenderOnlineMs = 3000;  // a sender goes quiet after this
+uint8_t g_senderMac[kMaxRelaySenders][6] = {};
+uint8_t g_senderSeq[kMaxRelaySenders] = {};
+uint8_t g_senderKind[kMaxRelaySenders] = {};
+uint32_t g_senderLastMs[kMaxRelaySenders] = {};
+bool g_senderSeen[kMaxRelaySenders] = {};
+int g_senderCount = 0;
+
+// The slot for this MAC, adding it on first sight. Beyond the cap every sender
+// folds into slot 0. Call with the lock held.
+int senderSlotOf(const uint8_t *mac) {
+  for (int i = 0; i < g_senderCount; i++) {
+    if (memcmp(g_senderMac[i], mac, 6) == 0) return i;
+  }
+  if (g_senderCount < kMaxRelaySenders) {
+    memcpy(g_senderMac[g_senderCount], mac, 6);
+    return g_senderCount++;
+  }
+  return 0;
+}
+
+uint32_t g_lastRateMs = 0;
+uint32_t g_framesLastSecond = 0;
+
+// The slot for this id, or -1. Call with the lock held.
+int slotOf(uint32_t id, bool extended) {
+  if (!g_tablesReady) return -1;  // no memory for the tables: nothing was ever heard
+  if (!extended) {
+    return (int)g_slotOf11Bit[id & CANN_TAG_ID] - 1;
+  }
+  for (int i = 0; i < g_extendedCount; i++) {
+    const int slot = g_extendedSlots[i];
+    if (g_slots[slot].id == id) return slot;
+  }
+  return -1;
+}
+
+// The slot for this id, taking a new one if it is the first time. -1 if full. Call
+// with the lock held.
+int slotOrNew(uint32_t id, bool extended) {
+  int slot = slotOf(id, extended);
+  if (slot >= 0) return slot;
+  if (g_used >= kMaxFrames) return -1;
+  if (extended && g_extendedCount >= kMaxExtended) return -1;
+
+  slot = g_used;
+  g_used++;
+  memset(&g_slots[slot], 0, sizeof(Slot));
+  g_slots[slot].id = id;
+  g_slots[slot].extended = extended;
+  if (extended) {
+    g_extendedSlots[g_extendedCount] = (uint8_t)slot;
+    g_extendedCount++;
+  } else {
+    g_slotOf11Bit[id & CANN_TAG_ID] = (uint8_t)(slot + 1);
+  }
+  return slot;
+}
+
+// A copy of a slot, for handing outside the lock.
+void copyOut(const Slot &slot, uint32_t now, Frame &out) {
+  out.id = slot.id;
+  out.extended = slot.extended;
+  out.length = slot.length;
+  memcpy(out.data, slot.data, 8);
+  out.count = slot.count;
+  out.perSec = slot.perSec;
+  out.ageMs = now - slot.lastMs;
+}
+
+}  // namespace
+
+void begin() {
+  Serial.println("[relay] Setting up the frame tables...");
+  g_slots = (Slot *)ram::psramCalloc(kMaxFrames, sizeof(Slot));
+  g_slotOf11Bit = (uint8_t *)ram::psramCalloc(SLOT_LOOKUP_ENTRIES, sizeof(uint8_t));
+  if (g_slots == nullptr || g_slotOf11Bit == nullptr) {
+    // The dash still works without these: the values come over HTTP instead, and
+    // the CAN DATA page stays empty.
+    Serial.println("[relay] NO MEMORY for the frame tables - relay packets will be ignored");
+    return;
+  }
+  g_tablesReady = true;
+  Serial.println("[relay] Set up the frame tables!");
+}
+
+void onPacket(const uint8_t *data, const int length, const uint8_t src[6]) {
+  if (!g_tablesReady) return;
+  const uint32_t now = millis();
+
+  CannHdr header;
+  if (length < (int)sizeof(CannHdr)) return;
+  memcpy(&header, data, sizeof(header));
+  if (header.proto != CANN_PROTO) {
+    taskENTER_CRITICAL(&g_mux);
+    g_stats.rejects++;
+    taskEXIT_CRITICAL(&g_mux);
+    return;
+  }
+
+  taskENTER_CRITICAL(&g_mux);
+  // A gap in the sequence is packets lost in the air, tracked per sender so two
+  // devices broadcasting on one channel do not interleave into phantom losses.
+  // A big jump backwards is the sender rebooting, which lost nothing.
+  const int sender = senderSlotOf(src);
+  if (g_senderSeen[sender]) {
+    const uint8_t gap = (uint8_t)(header.seq - g_senderSeq[sender] - 1);
+    if (gap < 128) g_stats.airLost += gap;
+  }
+  g_senderSeq[sender] = header.seq;
+  g_senderKind[sender] = header.kind;
+  g_senderLastMs[sender] = now;
+  g_senderSeen[sender] = true;
+  g_stats.packets++;
+  g_stats.srcLost += header.lost;
+  g_lastPacketMs = now;
+
+  // The frames, back to back: a 2-byte tag (the 11-bit id and the data length),
+  // a 4-byte id instead if the tag says 29-bit, then the data bytes.
+  int offset = sizeof(CannHdr);
+  bool malformed = false;
+  for (uint8_t i = 0; i < header.count; i++) {
+    if (offset + 2 > length) {
+      malformed = true;
+      break;
+    }
+    uint16_t tag;
+    memcpy(&tag, data + offset, 2);
+    offset += 2;
+
+    const uint8_t dataLength = (tag >> CANN_TAG_LEN_SHIFT) & 0x0F;
+    const bool extended = (tag & CANN_TAG_EXT) != 0;
+    uint32_t id = tag & CANN_TAG_ID;
+    if (extended) {
+      if (offset + 4 > length) {
+        malformed = true;
+        break;
+      }
+      memcpy(&id, data + offset, 4);
+      id &= 0x1FFFFFFF;
+      offset += 4;
+    }
+    if (dataLength > 8 || offset + dataLength > length) {
+      malformed = true;
+      break;
+    }
+
+    const int slotIndex = slotOrNew(id, extended);
+    if (slotIndex < 0) {
+      g_stats.tableFull++;
+    } else {
+      Slot &slot = g_slots[slotIndex];
+      memcpy(slot.data, data + offset, dataLength);
+      slot.length = dataLength;
+      slot.lastMs = now;
+      slot.count++;
+    }
+    offset += dataLength;
+    g_stats.frames++;
+  }
+  if (malformed) g_stats.rejects++;
+  taskEXIT_CRITICAL(&g_mux);
+}
+
+void poll() {
+  const uint32_t now = millis();
+  const uint32_t elapsed = now - g_lastRateMs;
+  if (elapsed < 1000) return;
+  g_lastRateMs = now;
+
+  taskENTER_CRITICAL(&g_mux);
+  g_stats.perSec = (uint32_t)((uint64_t)(g_stats.frames - g_framesLastSecond) * 1000 / elapsed);
+  g_framesLastSecond = g_stats.frames;
+  for (int i = 0; i < g_used; i++) {
+    Slot &slot = g_slots[i];
+    slot.perSec = (uint16_t)((uint64_t)(slot.count - slot.countLastSecond) * 1000 / elapsed);
+    slot.countLastSecond = slot.count;
+  }
+  taskEXIT_CRITICAL(&g_mux);
+}
+
+bool fresh() {
+  taskENTER_CRITICAL(&g_mux);
+  const uint32_t last = g_lastPacketMs;
+  taskEXIT_CRITICAL(&g_mux);
+  return last != 0 && (uint32_t)(millis() - last) <= kFreshMs;
+}
+
+Stats stats() {
+  taskENTER_CRITICAL(&g_mux);
+  const uint32_t now = millis();
+  Stats out = g_stats;
+  out.ids = g_used;
+  out.senders = (uint8_t)g_senderCount;
+  out.sendersOnline = 0;
+  for (int i = 0; i < g_senderCount; i++) {
+    if (g_senderSeen[i] && (uint32_t)(now - g_senderLastMs[i]) <= kSenderOnlineMs)
+      out.sendersOnline++;
+  }
+  out.ageMs = g_lastPacketMs ? (now - g_lastPacketMs) : UINT32_MAX;
+  taskEXIT_CRITICAL(&g_mux);
+  return out;
+}
+
+int sendersOnline(SenderInfo *out, int max) {
+  taskENTER_CRITICAL(&g_mux);
+  const uint32_t now = millis();
+  int n = 0;
+  for (int i = 0; i < g_senderCount; i++) {
+    if (!g_senderSeen[i]) continue;
+    const uint32_t age = (uint32_t)(now - g_senderLastMs[i]);
+    if (age > kSenderOnlineMs) continue;
+    if (out && n < max) {
+      memcpy(out[n].mac, g_senderMac[i], 6);
+      out[n].kind = g_senderKind[i];
+      out[n].ageMs = age;
+    }
+    n++;
+  }
+  // C6 before BCAN: arrival order depends on which box happened to send first,
+  // and a list that swaps places between boots is harder to read.
+  if (out) {
+    const int m = n < max ? n : max;
+    for (int i = 1; i < m; i++) {
+      const SenderInfo key = out[i];
+      int j = i - 1;
+      while (j >= 0 && out[j].kind > key.kind) {
+        out[j + 1] = out[j];
+        j--;
+      }
+      out[j + 1] = key;
+    }
+  }
+  taskEXIT_CRITICAL(&g_mux);
+  return n;
+}
+
+int count() {
+  taskENTER_CRITICAL(&g_mux);
+  const int used = g_used;
+  taskEXIT_CRITICAL(&g_mux);
+  return used;
+}
+
+bool frameAt(const int index, Frame &out) {
+  bool found = false;
+  taskENTER_CRITICAL(&g_mux);
+  const uint32_t now = millis();
+  if (index >= 0 && index < g_used) {
+    copyOut(g_slots[index], now, out);
+    found = true;
+  }
+  taskEXIT_CRITICAL(&g_mux);
+  return found;
+}
+
+bool find(const uint32_t id, const bool extended, Frame &out) {
+  bool found = false;
+  taskENTER_CRITICAL(&g_mux);
+  // Inside the lock: taken before it, a packet landing in between would make the
+  // frame newer than "now", and its age would wrap round to about 49 days.
+  const uint32_t now = millis();
+  const int slot = slotOf(id, extended);
+  if (slot >= 0) {
+    copyOut(g_slots[slot], now, out);
+    found = true;
+  }
+  taskEXIT_CRITICAL(&g_mux);
+  return found;
+}
+
+Values values(const uint8_t generation) {
+  Values out;
+  const dbc::Table *table = dbc::forGeneration(generation);
+  if (table == nullptr) return out;  // another make: its ids mean something else
+
+  // One decode path: chassis.cpp reads the frames, this narrows that view to the
+  // handful of values the dashboard has asked for so far. As the dashboard grows
+  // a use for the rest - fuel, indicators, the odometer - they are added here
+  // rather than decoded a second time.
+  const chassis::Chassis c = chassis::read(generation);
+  out.coolant = c.coolant;
+  out.oil = c.oil;
+  out.brake = c.brake;
+  out.handbrake = c.handbrake;
+  out.asrLamp = c.lampValid ? (c.lampAsr ? 1 : 0) : -1;
+  out.asrActive = c.lampValid ? (c.asrActive ? 1 : 0) : -1;
+  out.brakeBar = c.brakeBar;
+  out.oilPressureBar = c.oilPressureBar;
+  out.batteryV = c.batteryValid ? c.batteryV : NAN;
+  // Three states from two facts, both the car's own: off, armed (the column
+  // switch is on), engaged (MO2_Status_GRA says a speed is stored). MO2_GRAregelt
+  // is deliberately not used here - on the car it read 1 with the + side of the
+  // rocker and 0 with the -, so keying the brightness off it made the lamp change
+  // shade with which way the driver was nudging the set speed.
+  out.cruise = !c.cruiseValid ? -1 : !c.cruiseArmed ? 0 : (c.cruiseEngaged ? 2 : 1);
+  out.fuelLitres = c.fuelValid ? c.fuelLitres : NAN;
+  out.fuelLow = c.fuelLow;
+  out.odometerKm = c.odometerValid ? c.odometerKm : NAN;
+  out.indicators = c.indValid ? ((c.indLeft ? 1 : 0) | (c.indRight ? 2 : 0)) : -1;
+  out.term58s = c.termValid ? c.term58s : -1;
+  return out;
+}
+
+}  // namespace canrelay
