@@ -92,6 +92,10 @@ volatile uint32_t g_lastStatusMs = 0;
 volatile uint32_t g_lastCanMs = 0;
 volatile uint32_t g_lastIatMs = 0;
 volatile float g_iatC = NAN;
+volatile int g_term58s = -1;  // Terminal 58s, 0..99; -1 = not heard
+volatile bool g_schemeEvent = false;
+bool g_cruiseCombo = false;
+uint32_t g_lastCruiseEventMs = 0;
 
 volatile uint8_t g_channel = config::kFallbackChannel;
 volatile bool g_forceScan = false;
@@ -242,6 +246,10 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 
   bool haveIat = false;
   float iat = NAN;
+  bool haveDimmer = false;
+  int dimmer = 0;
+  bool haveCruise = false;
+  bool cruiseCombo = false;
 
   size_t off = sizeof(CannHdr);
   for (uint8_t i = 0; i < hdr.count; i++) {
@@ -278,6 +286,30 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
       haveIat = true;
     }
 
+    // Cluster_2 (0x420): Terminal 58s is byte 6 bits 0-6; bit 7 is its error
+    // flag and 0x7F is the no-value sentinel. This is the same field the
+    // S3-dash uses for auto day/night. Terminal 58d (byte 5) is not used:
+    // it reads 24% with the lights off there.
+    if (id == 0x420 && frameLen >= 7) {
+      const uint8_t b = data[off + 6];
+      const int value = b & 0x7F;
+      if (((b >> 7) & 0x01) == 0 && value != 0x7F) {
+        dimmer = value;
+        haveDimmer = true;
+      }
+    }
+
+    // GRA_New (0x38A, PQ cruise stalk): byte 1 bit 1 is GRA_Cancel, bit 2
+    // is GRA_Down_Short and bit 4 is GRA_Down_Long. The column can set Cancel
+    // and Down together; treat either down bit as the switch.
+    if (id == 0x38A && frameLen >= 2) {
+      const uint8_t b = data[off + 1];
+      const bool cancel = (b & 0x02) != 0;
+      const bool down = (b & (0x04 | 0x10)) != 0;
+      cruiseCombo = cancel && down;
+      haveCruise = true;
+    }
+
     if (lp.nFrames < kMaxLogFrames) {
       LogFrame &f = lp.frames[lp.nFrames++];
       f.id = id;
@@ -307,6 +339,15 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (haveIat) {
     g_iatC = iat;
     g_lastIatMs = now;
+  }
+  if (haveDimmer) g_term58s = dimmer;
+  if (haveCruise) {
+    if (cruiseCombo && !g_cruiseCombo &&
+        (uint32_t)(now - g_lastCruiseEventMs) >= 250) {
+      g_schemeEvent = true;
+      g_lastCruiseEventMs = now;
+    }
+    g_cruiseCombo = cruiseCombo;
   }
   g_log = lp;
   g_logNew = true;
@@ -527,6 +568,16 @@ void statusTick() {
   const Stats s = stats();
   const Telemetry t = telemetry();
 
+  static int printed58 = -2;
+  if (t.term58s != printed58) {
+    printed58 = t.term58s;
+    if (t.term58s < 0) {
+      Serial.println("[now] 58s --");
+    } else {
+      Serial.printf("[now] 58s %d%%\n", t.term58s);
+    }
+  }
+
   if (s.statusPackets == 0 && s.canPackets == 0) {
     Serial.printf("[gauge] ch=%u waiting (raw=%lu rejects=%lu)\n", s.channel,
                   (unsigned long)s.raw, (unsigned long)s.rejects);
@@ -621,6 +672,14 @@ void poll() {
 
 bool enabled() { return g_enabled; }
 
+bool takeSchemeEvent() {
+  taskENTER_CRITICAL(&g_mux);
+  const bool event = g_schemeEvent;
+  g_schemeEvent = false;
+  taskEXIT_CRITICAL(&g_mux);
+  return event;
+}
+
 Stats stats() {
   Stats s;
   const uint32_t now = millis();
@@ -644,6 +703,7 @@ Telemetry telemetry() {
   }
   t.iatValid = g_lastIatMs && (uint32_t)(now - g_lastIatMs) <= kIatFreshMs;
   t.iatC = t.iatValid ? (float)g_iatC : NAN;
+  t.term58s = g_term58s;
   taskEXIT_CRITICAL(&g_mux);
   return t;
 }

@@ -34,6 +34,13 @@
 #define LCD_BACKLIGHT_HZ 20000
 #define LCD_BACKLIGHT_BITS 10
 
+// Normal (day) brightness, then the S3-dash night curve:
+//   night = LCD_NIGHT_MIN_PCT + LCD_NIGHT_SPAN_PCT * 58s / 100
+// 5% + 60% of the dash dimmer gives 9% at 58s=7 and 64% at 58s=99.
+#define LCD_BACKLIGHT_DAY_PCT 85
+#define LCD_NIGHT_MIN_PCT 5
+#define LCD_NIGHT_SPAN_PCT 60
+
 // BOOT button, active low. Holding it at reset still enters download mode;
 // after boot it is a plain user input.
 #define BOARD_PIN_BOOT 0

@@ -67,6 +67,7 @@ bool pressed() {
   irq = g_isrFlag;
   interrupts();
 
+  const bool viaIsr = irq;
   const bool edge = irq || g_event;
   if (!edge) return false;
 
@@ -79,6 +80,14 @@ bool pressed() {
   g_isrFlag = false;
   interrupts();
   g_event = false;
+
+  // The ISR has already reported this press. Move the debounced state to
+  // "pressed" as well; otherwise the fallback poll sees the same still-held
+  // press become stable, sets g_event, and reports it a second time when the
+  // 200 ms cooldown expires. That looked like a second colour change on the
+  // same press. The fallback still works when no ISR arrived.
+  if (viaIsr) g_stable = true;
+
   g_lastAcceptMs = now;
   return true;
 }

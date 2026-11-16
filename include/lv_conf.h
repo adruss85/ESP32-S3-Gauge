@@ -65,9 +65,9 @@ void ohx_lv_assert_handler(const char *file, int line);
 /*====================
    FONTS
  *====================*/
-/* The big boost value is the 56 px Montserrat Bold subset copied from
-   OpenHaldex-S3-Dash (digits and the decimal point). The labels and the
-   IAT value use LVGL's stock Montserrat faces, same typeface. */
+/* The big boost value is the 72 px Montserrat Bold subset generated from
+   OpenHaldex-S3-Dash's face (digits and the decimal point). The labels and
+   the IAT value use LVGL's stock Montserrat faces, same typeface. */
 #define LV_FONT_MONTSERRAT_12 1
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_16 1
@@ -81,7 +81,7 @@ void ohx_lv_assert_handler(const char *file, int line);
 
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
-/* The 56 px face is RLE-compressed by lv_font_conv. Without this the
+/* The 72 px face is RLE-compressed by lv_font_conv. Without this the
    glyph bitmap lookup returns NULL and text drawing faults. */
 #define LV_USE_FONT_COMPRESSED 1
 

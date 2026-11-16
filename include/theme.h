@@ -25,10 +25,11 @@
 #define COL_STATUS_WARN lv_color_hex(0xf59e0b)   // amber - IAT only
 #define COL_STATUS_IDLE lv_color_hex(0xef4444)   // red - never received anything
 
-// 56 px Montserrat Bold, digits + '.', copied from OpenHaldex-S3-Dash.
-LV_FONT_DECLARE(lv_font_dash_num_56);
+// 72 px Montserrat Bold, digits + '.', generated from the face used by
+// OpenHaldex-S3-Dash. The larger face fills the space opened by the edge arc.
+LV_FONT_DECLARE(lv_font_dash_num_72);
 
-#define FONT_VALUE (&lv_font_dash_num_56)
+#define FONT_VALUE (&lv_font_dash_num_72)
 #define FONT_IAT (&lv_font_montserrat_24)
 #define FONT_LABEL (&lv_font_montserrat_20)
 #define FONT_SMALL (&lv_font_montserrat_16)

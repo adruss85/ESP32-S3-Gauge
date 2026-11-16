@@ -92,10 +92,10 @@ The capture code is compiled out of normal builds.
    Every unused widget, layout and colour-format path is pinned to 0 with the
    reason beside it. Do not enable a widget without removing another, and do
    not add a full-screen redraw path.
-7. **Fonts are deliberate.** The 56 px boost face is a Montserrat Bold subset
-   (digits and `.`) copied from `OpenHaldex-S3-Dash`; the labels and IAT use
-   stock Montserrat faces. The value decimal point is a `.` glyph from that
-   subset, not a drawn circle.
+7. **Fonts are deliberate.** The 72 px boost face is a Montserrat Bold subset
+   (digits and `.`) generated from `OpenHaldex-S3-Dash`'s face; the labels and
+   IAT use stock Montserrat faces. The value decimal point is a `.` glyph from
+   that subset, not a drawn circle.
 8. **No credentials in git.** The controller's AP password is not stored
    here; the gauge only listens.
 9. **Honesty about verification.** Bench != car. Boost has only been seen as

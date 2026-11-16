@@ -230,6 +230,26 @@ void setBacklight(uint8_t percent) {
   ledcWrite(LCD_PIN_BACKLIGHT, (uint32_t)percent * maxDuty / 100u);
 }
 
+void applyDimmer(int term58s) {
+  // -1 = no Cluster_2 frame heard; hold the current brightness rather than
+  // jumping to day when the relay is briefly quiet.
+  if (term58s < 0) return;
+
+  int pct;
+  if (term58s == 0) {
+    pct = LCD_BACKLIGHT_DAY_PCT;
+  } else {
+    pct = LCD_NIGHT_MIN_PCT + (LCD_NIGHT_SPAN_PCT * term58s) / 100;
+    if (pct < LCD_NIGHT_MIN_PCT) pct = LCD_NIGHT_MIN_PCT;
+    if (pct > 100) pct = 100;
+  }
+
+  static int last = -1;
+  if (pct == last) return;
+  last = pct;
+  setBacklight((uint8_t)pct);
+}
+
 bool ready() { return g_ready; }
 
 }  // namespace display

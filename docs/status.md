@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 16 Nov 2026, firmware **0.3.2**.
+Last updated: 16 Nov 2026, firmware **0.3.7**.
 
 ## Verified on the bench
 
@@ -15,43 +15,79 @@ Last updated: 16 Nov 2026, firmware **0.3.2**.
   **9.8 packets/s** with `rssi` around -75 dBm.
 * IAT decodes from CANN `Engine_3` (`0x380`) and displayed **4.5 C** on the
   bench, matching `0.75 * byte1 - 48`.
-* The arc, ticks, value row, `BOOST PSI` caption and IAT row fit without
-  overlap. The decimal point is a baseline `.` glyph; the empty arc
-  background is one consistent colour.
+* The edge-to-edge 360 px arc, the scale labels at radius 145, the 72 px
+  value row, `BOOST PSI` caption and IAT row fit without overlap. The decimal
+  point is a baseline `.` glyph; the empty arc background is one consistent
+  colour. All six schemes were captured and inspected after the 0.3.6 layout
+  change.
 * The link state renders as a **20x4 px rounded line** at the bottom edge:
   **green** = streaming OHX_STATUS, **orange** = stale/lost OHX_STATUS,
   **amber** = IAT only (CANN), **red** = never received anything.
 * LVGL buffers are released from the panel IO's `on_color_trans_done`
   callback, after the QSPI DMA transfer finishes.
-* Async WiFi scan runs in background; main loop (LVGL, BOOT key) is not blocked during channel hopping.
-* BOOT key ISR fix: press flags consumed only on accepted press (cooldown respected).
+* Async WiFi scan runs in background; main loop (LVGL, BOOT key) is not
+  blocked during channel hopping. With no anchor and the USB console
+  draining, `ohxnow::poll()` measured at most about **0.85 ms** while
+  hopping every 400 ms and rescanning every 15 s.
+* The physical **BOOT key** was exercised on the bench: a normal press, a
+  quick tap and a 1 s hold each produce exactly **one** scheme change. With
+  the console draining, ISR-to-handler measured **0.7-4.6 ms**; the scheme
+  repaint takes about **40 ms** including the last DMA flush. Before 0.3.3,
+  a press held past the 30 ms debounce made the poll fallback report the
+  same press a second time 203 ms later.
+* **USB console writes no longer block the loop** (0.3.4). With no host
+  draining `/dev/ttyACM0`, the disconnected-state `[scan] channel` lines
+  could hold `loop()` for seconds; one press measured **6.9 s** from ISR to
+  handler. `Serial.setTxTimeoutMs(0)` makes normal-build writes non-blocking;
+  the same no-monitor press then measured **~40 ms** ISR-to-flush and felt
+  immediate. The capture build keeps the blocking timeout so framebuffer
+  dumps are not shortened.
+* **Live boost sweep (0.3.5).** A synthetic 0-25 PSI sweep reproduced the
+  in-car corruption on the bench: the thick arc left a trail of old
+  indicator pixels and the value row showed stale white blocks. A forced
+  full-screen redraw was clean; invalidating only the whole arc was also
+  clean. The fix invalidates the whole arc on each displayed value change,
+  because LVGL's incremental arc clean-up is not sufficient for this
+  270-degree rounded indicator. The synthetic bench sweep and a car re-test
+  are clean, and the gauge still feels responsive.
+* **Terminal 58s auto-dimming (0.3.6).** `Cluster_2` (`0x420`) byte 6 is
+  decoded as Terminal 58s, using the same field and `5 + 60 × 58s/100` night
+  curve as `OpenHaldex-S3-Dash` (0 = day, 7..99 = night dimmer; 0x7F and the
+  error bit are ignored). The gauge uses **85%** as the day level. Terminal
+  58d is deliberately not used: the S3-dash measured it non-zero with the
+  lights off. Verified in the car: the backlight follows the dash dimmer
+  wheel and returns to day brightness with the lights off.
+* **Cruise-stalk accent cycle (0.3.7).** PQ `GRA_New` (`0x38A`) byte 1 is
+  decoded: `GRA_Cancel` is bit 1 and `GRA_Down_Short`/`GRA_Down_Long` are
+  bits 2/4. Cancel + either down bit is edge-triggered with a 250 ms cooldown
+  and logs `[ui] cruise combo` before the accent change. This is new and has
+  not yet been tried in the car.
 * Partial draw tiles increased to 60 lines (6 tiles/frame vs 9) to reduce rolling-shutter tearing.
 * The headless `esp32dev` configuration builds; its receiver path is
   unchanged from the earlier WROOM bench run.
 
 ## Not verified yet
 
-* **In a car.** Every reading above is from the bench rig and a CANN sender.
-* **Boost above ambient.** The controller sent `0` or the absent sentinel;
-  the gauge showed `0.0` or `--` accordingly. A positive boost sweep has not
-  been exercised.
-* **The BOOT key on the physical board.** The input is interrupt-driven
-  with a 200 ms cooldown; ISR fix verified in code but not pressed on hardware in this pass.
-  `TODO.md` tracks it.
-* **The stretched-readout fix in motion.** The buffer is now held until
-  `on_color_trans_done`, which removes the DMA/LVGL race, but the live value
-  sweep has not been re-observed on the glass by the agent.
+* **In a car.** Most readings above are from the bench rig and a CANN
+  sender. The live boost display has been exercised in the car for the
+  distortion fix, but numeric accuracy in the car is still unverified.
+* **Boost above ambient.** On the bench the controller sent `0` or the
+  absent sentinel; the gauge showed `0.0` or `--`. The car showed a rising
+  boost, but it has not been compared against a known manifold pressure.
+* **Cruise-stalk combo in the car.** The PQ `0x38A` decode is implemented,
+  but it has not been pressed in the car yet. Confirm one accent step per
+  Cancel + Down press.
 * **Long-run stability.** No soak test past a few minutes; PSRAM pool and
   internal RAM have not been watched over hours.
 
-## Build sizes, 0.3.2
+## Build sizes, 0.3.7
 
 Measured with `./.venv/bin/pio run -e esp32s3`:
 
 | Resource | Used | Capacity | Note |
 |---|---|---|---|
-| Flash | 1,203,218 B (18.4%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
-| Static RAM | 179,088 B (54.7%) | 327,680 B | 60-line draw buffers (2×360×60) |
+| Flash | 1,208,934 B (18.4%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
+| Static RAM | 179,112 B (54.7%) | 327,680 B | 60-line draw buffers (2×360×60) |
 | LVGL pool | 128 KB | — | allocated from 8 MB PSRAM |
 | Draw buffers | 86,400 B | — | 2 x 360x60 RGB565, internal RAM |
 

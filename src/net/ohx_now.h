@@ -33,6 +33,12 @@ struct Telemetry {
 
   bool iatValid;      // a fresh Engine_3 (0x380) frame has arrived
   float iatC;         // intake air temperature, degrees C
+
+  // Terminal 58s from Cluster_2 (0x420): 0 = lights off/day, 7..99 = the
+  // dash dimmer at night, -1 = never heard. The S3-dash rule uses 58s for
+  // day/night and brightness; 58d is non-zero with the lights off, so it is
+  // deliberately not used.
+  int term58s;
 };
 
 // Initialise WiFi + ESP-NOW and lock onto the controller's AP channel.
@@ -45,5 +51,9 @@ void poll();
 bool enabled();
 Stats stats();
 Telemetry telemetry();
+
+// One-shot: GRA_Cancel + GRA_Down on the PQ cruise stalk (GRA_New, 0x38A)
+// were pressed together. Consumed by loop() to advance the accent scheme.
+bool takeSchemeEvent();
 
 }  // namespace ohxnow

@@ -27,10 +27,11 @@ namespace {
 constexpr int kScaleMaxPsi = 25;
 constexpr int kArcRange = kScaleMaxPsi * 10;  // tenths of a PSI
 
-// Outer radius 157 px, stroke 21 px: the inner edge stays at 136 px, the
-// same as the original 300 px / 14 px arc, so it grows outwards only.
-constexpr int kArcSize = 314;
+// Outer radius 180 px fills the round glass; the 21 px stroke sits inside
+// the edge. The scale labels sit 14 px inside the inner edge (radius 145).
+constexpr int kArcSize = 360;
 constexpr int kArcWidth = 21;
+constexpr int kTickRadius = kArcSize / 2 - kArcWidth - 14;
 
 lv_obj_t *g_arc = nullptr;
 lv_obj_t *g_whole = nullptr;
@@ -44,15 +45,15 @@ lv_obj_t *g_ticks[6] = {};
 bool g_ready = false;
 
 struct Tick {
-  int16_t x;
-  int16_t y;
+  int16_t angle;  // LVGL arc angle, 135 = 0 PSI, 405 = 25 PSI
   const char *text;
 };
 
-// 0 .. 25 PSI placed on a radius-112 circle inside the arc.
+// Even 54-degree steps from the 135-degree arc start. Radius 145 puts the
+// labels close to the new edge arc but still inside its 159 px inner edge.
 const Tick kTicks[] = {
-    {101, 259, "0"},  {69, 163, "5"},   {129, 80, "10"},
-    {231, 80, "15"},  {291, 163, "20"}, {259, 259, "25"},
+    {135, "0"}, {189, "5"}, {243, "10"},
+    {297, "15"}, {351, "20"}, {405, "25"},
 };
 
 void plain(lv_obj_t *obj) {
@@ -78,9 +79,13 @@ void applyScheme() {
 void addTicks(lv_obj_t *scr) {
   size_t i = 0;
   for (const Tick &t : kTicks) {
+    const float rad = (float)t.angle * 0.0174532925f;
+    const int cx = kArcSize / 2 + (int)lroundf((float)kTickRadius * cosf(rad));
+    const int cy = kArcSize / 2 + (int)lroundf((float)kTickRadius * sinf(rad));
+
     lv_obj_t *box = lv_obj_create(scr);
     lv_obj_set_size(box, 40, 22);
-    lv_obj_set_pos(box, t.x - 20, t.y - 11);
+    lv_obj_set_pos(box, cx - 20, cy - 11);
     plain(box);
 
     lv_obj_t *label = lv_label_create(box);
@@ -97,8 +102,8 @@ void addTicks(lv_obj_t *scr) {
 
 void addValueRow(lv_obj_t *scr) {
   lv_obj_t *row = lv_obj_create(scr);
-  lv_obj_set_size(row, 300, 88);
-  lv_obj_set_pos(row, 30, 96);
+  lv_obj_set_size(row, 300, 96);
+  lv_obj_set_pos(row, 30, 88);
   plain(row);
 
   lv_obj_set_layout(row, LV_LAYOUT_FLEX);
@@ -252,6 +257,13 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
       lv_label_set_text(g_frac, buf);
       lv_arc_set_value(g_arc, tenths > kArcRange ? kArcRange : tenths);
     }
+
+    // LVGL's incremental clean-up of this thick rounded 270-degree arc left
+    // a trail of old indicator pixels and could paint over the overlapping
+    // value row. A synthetic 0-25 PSI sweep was clean only when the whole
+    // arc was repainted; incremental invalidation produced the green trail
+    // and the white block in the row.
+    lv_obj_invalidate(g_arc);
   }
 
   const bool iatOk = t.iatValid && !isnan(t.iatC);

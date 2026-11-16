@@ -18,16 +18,23 @@ not modified.
 
 ## What it shows
 
-- 270-degree arc, `0 / 5 / 10 / 15 / 20 / 25` PSI, one consistent accent
-  colour across the whole sweep (no warning colours).
-- Large white boost value with the decimal point on the text baseline.
+- Edge-to-edge 270-degree arc, `0 / 5 / 10 / 15 / 20 / 25` PSI, one
+  consistent accent colour across the whole sweep (no warning colours).
+- Large 72 px white boost value with the decimal point on the text baseline.
 - `BOOST PSI` caption, and the intake air temperature under a thin rule.
+- Automatic day/night dimming from the car's Terminal 58s dash-dimmer
+  reading (`Cluster_2`, `0x420`) in the CANN relay, using the same curve as
+  `OpenHaldex-S3-Dash`. Terminal 58d is not used: it reads non-zero with the
+  lights off. Without a 58s reading the backlight stays at the day level.
 - Six accent schemes: **green, orange, red, blue, white, purple**. Press the
   board's **BOOT** key (GPIO0) to step through them. The key is
   interrupt-driven, so quick taps land even while the arc is repainting.
-  Each press logs `[ui] accent <name>` on the console.
+  With the CANN relay on, pressing **Cancel + Down** together on the PQ
+  cruise stalk does the same; each source logs `[ui] accent <name>` (the
+  stalk adds `[ui] cruise combo`).
 - A **20x4 px link line** at the bottom edge: green when `OHX_STATUS` is
-  fresh, amber when only CANN is arriving, grey when nothing is.
+  fresh, orange when it is stale, amber when only CANN is arriving, red when
+  nothing has been heard.
 - Unknown values draw `--`, never a fake zero. A genuine `0` draws `0`.
 
 ![All six accent schemes](assets/gauge-schemes.png)
@@ -136,7 +143,7 @@ The controller, its CAN decoding and the ESP-NOW protocol are the work of
 `include/ohx_proto.h` and `include/cannow_proto.h` are verbatim copies of the
 shared wire-format headers; refresh them from upstream, never hand-edit them.
 
-The 56 px Montserrat Bold subset is reused from
+The 72 px Montserrat Bold subset is generated from the face used by
 [`OpenHaldex-S3-Dash`](https://github.com/adruss85/OpenHaldex-S3-Dash).
 
 ## Licence

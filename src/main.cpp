@@ -60,6 +60,15 @@ void dumpSnapshot() {
 
 void setup() {
   Serial.begin(115200);
+#if !GAUGE_CAPTURE && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+  // USBCDC's 250 ms TX timeout is applied per write. With no host draining
+  // the CDC port, the disconnected-state [scan] channel lines (one every
+  // 400 ms) can hold loop() for seconds: a bench press was measured at
+  // 6.9 s from ISR to handler. Drop console output instead of blocking.
+  // The capture build keeps the blocking timeout so framebuffer dumps are
+  // not shortened.
+  Serial.setTxTimeoutMs(0);
+#endif
   delay(250);
   Serial.println();
   Serial.printf("ESP32-S3-Gauge %s\n", config::kVersion);
@@ -94,7 +103,10 @@ void loop() {
 #if GAUGE_HAS_DISPLAY
   display::loop();
 
-  if (boot_button::pressed()) gauge_ui::nextScheme();
+  const bool button = boot_button::pressed();
+  const bool cruise = ohxnow::takeSchemeEvent();
+  if (cruise) Serial.println("[ui] cruise combo");
+  if (button || cruise) gauge_ui::nextScheme();
 
   static uint32_t lastUi = 0;
   const uint32_t now = millis();
@@ -111,6 +123,7 @@ void loop() {
     s.raw = 1;
     s.statusPackets = 1;
 #endif
+    display::applyDimmer(t.term58s);
     gauge_ui::update(t, s);
   }
 
