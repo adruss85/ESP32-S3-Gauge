@@ -52,8 +52,26 @@ bool enabled();
 Stats stats();
 Telemetry telemetry();
 
+// Channel the radio is on. The setup AP is started on this channel because
+// AP+STA share one radio; there is no second channel to give the page.
+uint8_t channel();
+
+// Highest channel the radio may tune to. The softAP's country policy caps
+// this (the default world-safe setting allows 1-11, so 12/13 fail once the
+// AP is up). gauge_web reports the real limit after starting the AP.
+void setChannelLimit(uint8_t maxChannel);
+
+// The setup AP is up. A softAP has to stay on one channel to be joinable,
+// so this disables the channel walk; the periodic full scan still finds the
+// controller's AP.
+void setSetupAp(bool up);
+
 // One-shot: GRA_Cancel + GRA_Down on the PQ cruise stalk (GRA_New, 0x38A)
 // were pressed together. Consumed by loop() to advance the accent scheme.
 bool takeSchemeEvent();
+
+// One-shot: GRA_Down_Long on the PQ cruise stalk without GRA_Cancel. This is
+// the cruise-stalk equivalent of the BOOT 700 ms hold and toggles the screen.
+bool takeModeEvent();
 
 }  // namespace ohxnow

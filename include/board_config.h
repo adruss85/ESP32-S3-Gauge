@@ -53,6 +53,12 @@
 #define BOARD_I2C_SCL 10
 #define BOARD_I2C_HZ 400000
 
+// QMI8658 6-axis IMU. The SA0 strap selects 0x6A or 0x6B; this board
+// answers at 0x6B, but the driver probes 0x6A first so a different strap
+// does not need a rebuild.
+#define BOARD_IMU_ADDR_A 0x6A
+#define BOARD_IMU_ADDR_B 0x6B
+
 // TCA9554: address 0x20 (A2:A0 all low).
 //   P0 = touch reset
 //   P1 = LCD reset

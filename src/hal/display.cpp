@@ -24,14 +24,84 @@ namespace {
 
 constexpr int kDrawLines = 60;  // partial draw buffer: 360 x 60 px (6 tiles, less tearing)
 constexpr int kProbeHz = 5 * 1000 * 1000;
+constexpr size_t kTransQueueDepth = 64;
+constexpr uint32_t kTeTimeoutUs = 20000;
 
 esp_lcd_panel_handle_t g_panel = nullptr;
 lv_display_t *g_disp = nullptr;
 bool g_ready = false;
 volatile uint32_t g_flushDone = 0;
 bool g_firstFlushLogged = false;
+bool g_teDisabled = false;
+bool g_teRising = true;
+uint32_t g_teWaits = 0;
+uint32_t g_teMisses = 0;
 
 uint32_t tickCb() { return (uint32_t)millis(); }
+
+// The ST77916's TE output (GPIO18) pulses once per panel frame. Starting a
+// flush on that edge keeps a moving blob from being written while the panel
+// is scanning the same rows. Without it the G-meter's fast, high-contrast
+// dot visibly tears even though the DMA buffer hand-off is correct.
+//
+// The wait is capped at one frame and disables itself if the pin never
+// pulses (wrong init, floating pin, or a panel that does not drive TE), so
+// a missing signal costs one log line rather than 20 ms per frame.
+void onRenderReady(lv_event_t *) {
+  if (g_teDisabled) return;
+
+  const uint32_t started = micros();
+  bool last = digitalRead(LCD_PIN_TE);
+  while ((uint32_t)(micros() - started) < kTeTimeoutUs) {
+    const bool now = digitalRead(LCD_PIN_TE);
+    const bool edge = g_teRising ? (!last && now) : (last && !now);
+    if (edge) {
+      g_teWaits++;
+      g_teMisses = 0;
+      return;
+    }
+    last = now;
+  }
+
+  if (++g_teMisses >= 30) {
+    g_teDisabled = true;
+    Serial.println("[lcd] TE not pulsing; flushing unsynced");
+  }
+}
+
+// Probe once after the panel is on. Two edges in 30 ms means a 60 Hz TE.
+// The level that lasts longer is the active scan; the short level is the
+// V-blank, so wait for the edge into the short level.
+bool teIsPulsing() {
+  uint32_t edges = 0;
+  uint32_t high = 0;
+  uint32_t low = 0;
+  bool last = digitalRead(LCD_PIN_TE);
+  const uint32_t started = micros();
+  while ((uint32_t)(micros() - started) < 30000) {
+    const bool now = digitalRead(LCD_PIN_TE);
+    if (now) {
+      high++;
+    } else {
+      low++;
+    }
+    if (now != last) {
+      edges++;
+      last = now;
+    }
+  }
+  if (edges < 2) {
+    Serial.println("[lcd] TE not pulsing; flushing unsynced");
+    g_teDisabled = true;
+    return false;
+  }
+
+  g_teRising = high <= low;  // short high = V-blank high -> rising edge
+  Serial.printf("[lcd] TE sync on (%lu edges, high %lu low %lu, %s edge)\n",
+                (unsigned long)edges, (unsigned long)high, (unsigned long)low,
+                g_teRising ? "rising" : "falling");
+  return true;
+}
 
 // The SPI panel IO queues the transfer and returns immediately: the buffer
 // is still being read by DMA. LVGL must not reuse it until this callback
@@ -94,7 +164,7 @@ bool initBusAndPanel() {
   ioCfg.dc_gpio_num = -1;
   ioCfg.spi_mode = 0;
   ioCfg.pclk_hz = kProbeHz;
-  ioCfg.trans_queue_depth = 10;
+  ioCfg.trans_queue_depth = kTransQueueDepth;
   ioCfg.lcd_cmd_bits = 32;
   ioCfg.lcd_param_bits = 8;
   ioCfg.flags.quad_mode = true;
@@ -151,6 +221,22 @@ bool initBusAndPanel() {
 
   esp_lcd_panel_reset(g_panel);
   esp_lcd_panel_init(g_panel);
+
+  // Enable the tearing-effect output (TEON 0x35, parameter 0x00 = V-blank
+  // only). The vendor init table is a verbatim copy and does not include
+  // it; doing it here keeps the copied sequence untouched. It must be sent
+  // after the vendor table's display-on but before the panel's final
+  // disp-on call, matching the order that was measured to start the TE pin.
+  // QSPI command encoding: the vendor's tx_param() puts the write opcode
+  // in the top byte and the command in bits 15:8. Sending a bare 0x35 would
+  // be ignored by the panel.
+  const uint8_t teOn = 0x00;
+  const int teOnCmd = (0x02 << 24) | (0x35 << 8);  // LCD_OPCODE_WRITE_CMD
+  err = esp_lcd_panel_io_tx_param(io, teOnCmd, &teOn, 1);
+  if (err != ESP_OK) {
+    Serial.printf("[lcd] TEON failed: %s\n", esp_err_to_name(err));
+  }
+  delay(5);
   esp_lcd_panel_disp_on_off(g_panel, true);
   return true;
 }
@@ -165,18 +251,19 @@ bool initLvgl() {
     return false;
   }
 
-  // Two partial buffers: LVGL fills one while the other is on the wire.
-  // LVGL requires them aligned to LV_DRAW_BUF_ALIGN (4 bytes); a plain
-  // lv_color_t array is only guaranteed 2-byte alignment and trips the
-  // assert in lv_display_set_buffers().
+  // One partial buffer, not two. The panel flush is asynchronous, and the
+  // G-meter's many small areas exposed an intermittent overlap where the
+  // second buffer's command/data sequence could start while the first was
+  // still on the wire. Serialising the flushes costs a little throughput
+  // and 43 KB of RAM; it removes that overlap.
   alignas(LV_DRAW_BUF_ALIGN) static lv_color_t buf1[LCD_H_RES * kDrawLines];
-  alignas(LV_DRAW_BUF_ALIGN) static lv_color_t buf2[LCD_H_RES * kDrawLines];
 
   lv_display_set_color_format(g_disp, LV_COLOR_FORMAT_RGB565);
   lv_display_set_flush_cb(g_disp, flushCb);
-  lv_display_set_buffers(g_disp, buf1, buf2, sizeof(buf1),
+  lv_display_set_buffers(g_disp, buf1, nullptr, sizeof(buf1),
                          LV_DISPLAY_RENDER_MODE_PARTIAL);
   lv_display_set_default(g_disp);
+  lv_display_add_event_cb(g_disp, onRenderReady, LV_EVENT_RENDER_READY, nullptr);
   return true;
 }
 
@@ -204,9 +291,12 @@ bool begin() {
   ledcWrite(LCD_PIN_BACKLIGHT, 0);
 
   if (!initBusAndPanel()) return false;
+  pinMode(LCD_PIN_TE, INPUT_PULLUP);
+  teIsPulsing();
   if (!initLvgl()) return false;
 
-  setBacklight(85);
+  // The backlight stays off until the first frame is queued; main() turns
+  // it on after the splash (or gauge) has been rendered once.
   g_ready = true;
   Serial.printf("[lcd] %s ready (%dx%d)\n", BOARD_NAME, LCD_H_RES, LCD_V_RES);
   return true;

@@ -16,8 +16,8 @@
 #define LV_COLOR_DEPTH 16
 #define LV_DRAW_BUF_STRIDE_ALIGN 4
 
-/* RGB565 is the panel format. A8 is the glyph mask path; the gauge draws
-   no images, so the other source formats can stay off. */
+/* RGB565 is the panel format. A8 is the glyph mask path; the splash is the
+   only RGB565 image. The other source formats can stay off. */
 #define LV_DRAW_SW_SUPPORT_RGB565 1
 #define LV_DRAW_SW_SUPPORT_RGB565A8 1
 #define LV_DRAW_SW_SUPPORT_RGB565_SWAPPED 0
@@ -95,16 +95,16 @@ void ohx_lv_assert_handler(const char *file, int line);
 #define LV_USE_ARC 1   /* the 270 degree boost scale */
 
 #define LV_USE_ANIMIMG 0
-#define LV_USE_BAR 1
-#define LV_USE_BUTTON 1
+#define LV_USE_BAR 1   /* the splash loading rule */
+#define LV_USE_BUTTON 0 /* not drawn; its slot pays for the splash image */
 #define LV_USE_BUTTONMATRIX 0
 #define LV_USE_CALENDAR 0
-#define LV_USE_CANVAS 0
+#define LV_USE_CANVAS 1   /* the G-meter dot, tail and readout are one canvas */
 #define LV_USE_CHART 0
 #define LV_USE_CHECKBOX 0
 #define LV_USE_COLORWHEEL 0
 #define LV_USE_DROPDOWN 0
-#define LV_USE_IMAGE 0
+#define LV_USE_IMAGE 1   /* boot splash only; no images on the gauge screens */
 #define LV_USE_IMAGEBUTTON 0
 #define LV_USE_KEYBOARD 0
 #define LV_USE_LED 0

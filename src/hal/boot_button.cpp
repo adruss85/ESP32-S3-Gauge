@@ -1,13 +1,20 @@
 // =====================================================================
-// boot_button.cpp - the board's BOOT key as a user input
+// boot_button.cpp - the board's BOOT key as a two-action user input
 //
 // GPIO0 is a strapping pin only while the chip resets. Once the firmware
-// is running it is a normal input, so the same key that enters download
-// mode also cycles the gauge's colour scheme.
+// is running it is a normal input:
 //
-// The key is interrupt-driven: one anti-aliased arc repaint can hold
-// loop() for longer than a quick press, so polling alone misses taps.
-// A slow poll still runs as a fallback and shares the same cooldown.
+//   short press  -> next accent colour
+//   long press   -> boost gauge <-> G-meter
+//
+// A long press fires at the 700 ms threshold, not on release, so the mode
+// changes while the finger is still down. Its release is swallowed.
+//
+// This is polled, not interrupt-driven. The old ISR existed because a
+// disconnected USB CDC console could hold loop() for seconds; 0.3.4 made
+// those writes non-blocking, and the panel flush is asynchronous. Polling
+// every loop with a 30 ms debounce catches a deliberate tap and cannot
+// mistake contact bounce on the way into a long press for a short one.
 // =====================================================================
 #include "hal/boot_button.h"
 
@@ -19,19 +26,18 @@ namespace boot_button {
 namespace {
 
 constexpr uint32_t kCooldownMs = 200;  // ignore contact bounce and double taps
-
-volatile bool g_isrFlag = false;
+constexpr uint32_t kLongMs = 700;      // deliberate hold, not a fat-finger
 
 bool g_raw = false;        // last sample, true = pressed
 bool g_stable = false;     // debounced state
 uint32_t g_changedMs = 0;  // when g_raw last changed
-bool g_event = false;      // a press is waiting to be reported
+bool g_down = false;       // a press is being timed
+uint32_t g_downMs = 0;     // first raw falling edge
+bool g_longSent = false;   // this press already produced Long
+bool g_shortPending = false;
 uint32_t g_lastAcceptMs = 0;
 
 bool sample() { return digitalRead(BOARD_PIN_BOOT) == LOW; }
-
-// Keep the ISR to one store: millis() and debounce live in pressed().
-void IRAM_ATTR onFall() { g_isrFlag = true; }
 
 }  // namespace
 
@@ -41,13 +47,14 @@ void begin() {
   g_raw = sample();
   g_stable = g_raw;
   g_changedMs = millis();
-  g_event = false;
+  g_down = g_stable;
+  g_downMs = g_changedMs;
+  g_longSent = false;
+  g_shortPending = false;
   g_lastAcceptMs = millis() - kCooldownMs;
-
-  attachInterrupt(digitalPinToInterrupt(BOARD_PIN_BOOT), onFall, FALLING);
 }
 
-bool pressed() {
+Event poll() {
   const uint32_t now = millis();
   const bool raw = sample();
 
@@ -56,40 +63,38 @@ bool pressed() {
     g_changedMs = now;
   }
 
+  // 30 ms debounce. The timer starts at the first raw edge, so a 700 ms
+  // hold is measured from the real press, not from the end of debounce.
   if ((uint32_t)(now - g_changedMs) >= BOARD_BOOT_DEBOUNCE_MS &&
       g_stable != g_raw) {
     g_stable = g_raw;
-    if (g_stable) g_event = true;  // report on the falling edge only
+    if (g_stable) {
+      if (!g_down) {
+        g_down = true;
+        g_downMs = g_changedMs;
+        g_longSent = false;
+      }
+    } else {
+      g_down = false;
+      if (!g_longSent) g_shortPending = true;
+    }
   }
 
-  bool irq;
-  noInterrupts();
-  irq = g_isrFlag;
-  interrupts();
+  if (g_down && !g_longSent && (uint32_t)(now - g_downMs) >= kLongMs) {
+    g_longSent = true;
+    g_shortPending = false;
+    g_lastAcceptMs = now;
+    return Event::Long;
+  }
 
-  const bool viaIsr = irq;
-  const bool edge = irq || g_event;
-  if (!edge) return false;
+  if (g_shortPending &&
+      (uint32_t)(now - g_lastAcceptMs) >= kCooldownMs) {
+    g_shortPending = false;
+    g_lastAcceptMs = now;
+    return Event::Short;
+  }
 
-  // One report per press: bounce edges and a fast second tap share the
-  // cooldown, which is shorter than a deliberate double press.
-  if ((uint32_t)(now - g_lastAcceptMs) < kCooldownMs) return false;
-
-  // Only consume the flags now that we've accepted the press.
-  noInterrupts();
-  g_isrFlag = false;
-  interrupts();
-  g_event = false;
-
-  // The ISR has already reported this press. Move the debounced state to
-  // "pressed" as well; otherwise the fallback poll sees the same still-held
-  // press become stable, sets g_event, and reports it a second time when the
-  // 200 ms cooldown expires. That looked like a second colour change on the
-  // same press. The fallback still works when no ISR arrived.
-  if (viaIsr) g_stable = true;
-
-  g_lastAcceptMs = now;
-  return true;
+  return Event::None;
 }
 
 }  // namespace boot_button

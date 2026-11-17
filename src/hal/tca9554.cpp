@@ -44,8 +44,13 @@ bool begin(uint8_t addr) {
     return false;
   }
 
-  // All pins outputs, all low. The vendor example does the same at boot.
-  if (!writeReg(kRegConfig, 0x00) || !writeReg(kRegOutput, 0x00)) {
+  // P0/P1/P2 are outputs: touch reset, LCD reset and SD chip select. P3/P4
+  // are the QMI8658's INT2/INT1 pins, which the IMU drives; they must stay
+  // inputs or the expander and the IMU would fight over the line. P5..P7
+  // are unused outputs. The previous all-outputs setup was harmless while
+  // the IMU was asleep, but the G-meter enables it.
+  constexpr uint8_t kConfig = 0x18;  // 1 = input
+  if (!writeReg(kRegConfig, kConfig) || !writeReg(kRegOutput, 0x00)) {
     Serial.println("[tca9554] register write failed");
     g_addr = 0;
     return false;

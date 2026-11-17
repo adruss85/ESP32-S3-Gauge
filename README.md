@@ -38,9 +38,11 @@ does not touch the car's network.
   press** of the board's **BOOT** key (GPIO0) steps through them; a **700 ms
   hold** switches to the G-meter and back. The key is polled with a 30 ms
   debounce, so a deliberate tap lands even while the arc is repainting. With
-  the CANN relay on, pressing **Cancel + Down** together on the PQ cruise stalk
-  does the same; each source logs `[ui] accent <name>` (the stalk adds
-  `[ui] cruise combo`). The scheme is stored in NVS and survives a power cycle.
+  the CANN relay on, **Cancel + Down** together on the PQ cruise stalk cycles
+  the accent, and a **long press of Down alone** switches screens
+  (`[ui] cruise mode`); each accent source logs `[ui] accent <name>` (the
+  stalk adds `[ui] cruise combo`). The scheme is stored in NVS and survives a
+  power cycle.
 - A **G-meter screen**: a 50 px accent-coloured blob moves vertically for
   acceleration/braking and horizontally for lateral acceleration; a fading
   tail covers the last second. The white `0.00 g` readout at the bottom is
@@ -76,8 +78,9 @@ vertical position is acceleration/braking; its horizontal position is lateral
 acceleration. A 20-dot tail fades over the last second; the white number at the
 bottom is the 1 s mean of `sqrt(longitudinal² + lateral²)`.
 
-Switch screens from the web page, the console `m` key, or a **700 ms BOOT
-hold**. The mode is stored in NVS. The board's power button is a battery
+Switch screens from the web page, the console `m` key, a **700 ms BOOT
+hold**, or a **long Down press on the PQ cruise stalk** (CANN relay on). The
+mode is stored in NVS. The board's power button is a battery
 latch, not a GPIO input, so BOOT is the only physical key; a short press still
 steps the accent scheme. The change is a 260 ms cross-fade. Each object fades
 its own opacity because a full-screen LVGL opacity layer would need 259 KB
@@ -86,9 +89,10 @@ and the pool is 128 KB.
 The math follows the usual accelerometer G-meter practice:
 
 - **Gravity is learned, not assumed zero.** A 2 s tracker follows the gravity
-  vector while the car is stationary (`| |a| - 1 g | < 0.06 g`, gyro under
-  0.2 rad/s, and controller speed under 1 km/h when a fresh speed reading is
-  available). A tilt changes which axis gravity is on but not `|a|`, so a new
+  vector while the car is stationary. A fresh controller speed below 1 km/h
+  is trusted on its own, so engine vibration does not freeze the zero; with
+  no speed data the IMU gate is `| |a| - 1 g | < 0.06 g` and gyro under
+  0.2 rad/s. A tilt changes which axis gravity is on but not `|a|`, so a new
   mount attitude is re-learned instead of leaving a permanent offset.
 - **Dynamic acceleration is low-passed at 8 Hz.** This rejects road vibration
   without eating a launch.
@@ -107,12 +111,38 @@ Mount and direction are stored settings:
 |---|---|---|---|
 | **Upright** (default) | chip Z (screen normal) | chip X | Gauge faces the driver |
 | **Flat** | chip Y (screen vertical) | chip X | Screen up, top of the glass forward |
+| **Auto** | from gravity | chip X | Picks upright or flat at boot |
+
+`Auto` compares the learned gravity on chip Y and Z: upright puts it on Y,
+flat on Z. A 45 degree mount is ambiguous; use the explicit setting there.
 
 **Flip accel/brake** inverts the longitudinal sign for a 180° mount. The
 default signs assume the QMI8658 is on the back of the PCB, with +Z pointing
 away from the glass. Check the first drive: the blob must move up under
 acceleration and down under braking; if it is reversed, tick Flip. Accuracy in
 a car has not been verified yet (see [`docs/status.md`](docs/status.md)).
+
+The panel's **TE output** is used for the moving dot: `display.cpp` waits
+for the ST77916 V-blank edge before flushing a render, so the dot is not
+written while the panel scans the same rows. The boot log states whether
+the signal was found (`[lcd] TE sync on ...`); if it says `TE not pulsing`,
+the flush falls back to unsynced. The panel IO queue holds 64 transfers,
+and the G-meter draws its dot, tail and readout into one 360x300 canvas, so
+only one object is invalidated instead of a blob, 20 tail dots and a label.
+The display uses one partial draw buffer and serialises the flushes.
+
+## Boot screen
+
+Every boot shows [`assets/canvas-gauge-splash-360-base.jpg`](assets/canvas-gauge-splash-360-base.jpg)
+for three seconds. The JPEG is linked into flash and decoded by the S3 mask
+ROM's TJpgDec into a temporary 259,200 B PSRAM buffer (94 ms measured); the
+buffer is freed when the splash is deleted, not hidden. A green `lv_bar`
+sits on the artwork's red rule (200x3 at x=80, y=202) and fills from 0 to
+100% over 3 s; the running version is bottom right. The panel stays dark
+until the first splash frame is queued, so boot noise is not shown.
+
+The splash can be photographed with `-DGAUGE_CAPTURE_SPLASH=1`; see
+[Capturing the glass](#capturing-the-glass).
 
 ## Build and flash
 
@@ -151,17 +181,21 @@ Console keys while it is running:
 A healthy link looks like:
 
 ```text
-ESP32-S3-Gauge 0.5.0
+ESP32-S3-Gauge 0.5.2
 [gauge] boost from OHX_STATUS, IAT from Engine_3 (0x380)
 [set] scheme 0, scale 0.0..25.0 PSI
 [set] mode gauge, mount upright, flip 0
 [lcd] panel id: 00 02 7F 7F
 [lcd] using vendor init sequence
+[lcd] TE sync on (4 edges, high 1029 low 20495, rising edge)
 [lcd] Waveshare ESP32-S3-LCD-1.85 ready (360x360)
 [tca9554] ready at 0x20
 [imu] QMI8658 at 0x6B, accel +/-4 g 250 Hz, gyro 256 dps
 [ui] mode gauge, mount upright, flip 0
+[splash] picture 360x360 in 94 ms (19112 B flash, 259200 B PSRAM)
+[ui] splash up (3 s)
 [ui] accent green (short press cycles, long press = G-meter)
+[ui] splash down
 [now] scan: 7 APs; anchor "OpenHaldex-C6" ch 1 (-74 dBm)
 [now] hop limit is now 1-11
 [web] AP "CANv-gauge" (open) channel 1, http://192.168.4.1/
@@ -199,8 +233,8 @@ persist in NVS:
   clamps. A negative minimum is allowed because the controller reports
   vacuum as a negative mbar value.
 - **Display** — choose **Boost gauge** or **G-meter**, the mount
-  (**Upright** or **Flat**), and **Flip accel/brake**. **Zero G-meter** stores
-  the current attitude as 0 g; use it stationary.
+  (**Upright**, **Flat** or **Auto**), and **Flip accel/brake**. **Zero
+  G-meter** stores the current attitude as 0 g; use it stationary.
 
 Firmware upload uses the same page or curl:
 
@@ -210,7 +244,7 @@ curl -F "firmware=@.pio/build/esp32s3/firmware.bin" http://192.168.4.1/update
 ```
 
 The image is written to the inactive OTA slot, so a failed upload cannot
-overwrite the running one, and the gauge reboots into it. A 1.36 MB image took
+overwrite the running one, and the gauge reboots into it. A 1.39 MB image took
 about 7 s on the bench.
 
 ### The AP shares the radio
@@ -272,6 +306,15 @@ PLATFORMIO_BUILD_FLAGS="-DGAUGE_CAPTURE=1 -DGAUGE_CAPTURE_GMETER=1" \
 
 That writes six frames named by accent, exactly like the gauge sweep.
 
+`-DGAUGE_CAPTURE_SPLASH=1` captures the boot screen instead, at two seconds
+with the loading rule part-filled:
+
+```bash
+PLATFORMIO_BUILD_FLAGS="-DGAUGE_CAPTURE=1 -DGAUGE_CAPTURE_SPLASH=1" \
+  ./.venv/bin/pio run -e esp32s3 -t upload --upload-port /dev/ttyACM0
+./.venv/bin/python tools/capture_frame.py /dev/ttyACM0 /tmp/splash 1
+```
+
 Host-only checks (no hardware) live in `tools/`:
 
 ```bash
@@ -283,7 +326,7 @@ g++ -std=c++17 -Itools/host -Isrc -Iinclude -o /tmp/boot_button_test tools/boot_
 ```
 
 `gmeter_test` checks gravity removal, the 0.5 g signs, the diagonal
-`sqrt(v² + l²)`, the speed gate, tilt re-learning and Zero. `boot_button_test`
+`sqrt(v² + l²)`, the speed gate, tilt re-learning, auto mount and Zero. `boot_button_test`
 checks short, long and bounce behaviour. Neither touches the panel, the IMU or
 the car.
 
@@ -294,8 +337,9 @@ include/     board pins, LVGL config, theme, version, shared wire headers
 src/app/     config, NVS settings (scheme/scale/mode/mount), G-meter math
 src/hal/     QSPI panel, TCA9554 reset, BOOT key, QMI8658 IMU
 src/net/     ESP-NOW receive, channel discovery, IAT decode, setup AP + OTA
-src/ui/      gauge layout, G-meter screen, dashboard/mode fade, accents
+src/ui/      gauge, G-meter, dashboard/fade, boot splash, accents
 tools/       serial monitor, framebuffer capture, host math/button checks
+assets/      splash art and documentation screenshots
 docs/        status and verification notes
 AGENTS.md    guidance for AI coding agents
 TODO.md      open hardware and firmware items

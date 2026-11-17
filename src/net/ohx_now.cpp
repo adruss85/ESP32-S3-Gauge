@@ -103,8 +103,11 @@ volatile uint32_t g_lastIatMs = 0;
 volatile float g_iatC = NAN;
 volatile int g_term58s = -1;  // Terminal 58s, 0..99; -1 = not heard
 volatile bool g_schemeEvent = false;
+volatile bool g_modeEvent = false;
 bool g_cruiseCombo = false;
+bool g_cruiseMode = false;
 uint32_t g_lastCruiseEventMs = 0;
+uint32_t g_lastCruiseModeMs = 0;
 
 volatile uint8_t g_channel = config::kFallbackChannel;
 volatile bool g_forceScan = false;
@@ -266,6 +269,7 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   int dimmer = 0;
   bool haveCruise = false;
   bool cruiseCombo = false;
+  bool cruiseMode = false;
 
   size_t off = sizeof(CannHdr);
   for (uint8_t i = 0; i < hdr.count; i++) {
@@ -321,8 +325,14 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     if (id == 0x38A && frameLen >= 2) {
       const uint8_t b = data[off + 1];
       const bool cancel = (b & 0x02) != 0;
-      const bool down = (b & (0x04 | 0x10)) != 0;
-      cruiseCombo = cancel && down;
+      const bool downShort = (b & 0x04) != 0;
+      const bool downLong = (b & 0x10) != 0;
+      // Cancel + Down (either length) keeps the documented accent cycle.
+      // Down long on its own is the cruise-stalk equivalent of the BOOT
+      // hold: it switches the gauge/G-meter screen. The stalk generates the
+      // long bit; the gauge does not have to time the hold itself.
+      cruiseCombo = cancel && (downShort || downLong);
+      cruiseMode = downLong && !cancel;
       haveCruise = true;
     }
 
@@ -363,7 +373,13 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
       g_schemeEvent = true;
       g_lastCruiseEventMs = now;
     }
+    if (cruiseMode && !g_cruiseMode &&
+        (uint32_t)(now - g_lastCruiseModeMs) >= 250) {
+      g_modeEvent = true;
+      g_lastCruiseModeMs = now;
+    }
     g_cruiseCombo = cruiseCombo;
+    g_cruiseMode = cruiseMode;
   }
   g_log = lp;
   g_logNew = true;
@@ -765,6 +781,14 @@ bool takeSchemeEvent() {
   taskENTER_CRITICAL(&g_mux);
   const bool event = g_schemeEvent;
   g_schemeEvent = false;
+  taskEXIT_CRITICAL(&g_mux);
+  return event;
+}
+
+bool takeModeEvent() {
+  taskENTER_CRITICAL(&g_mux);
+  const bool event = g_modeEvent;
+  g_modeEvent = false;
   taskEXIT_CRITICAL(&g_mux);
   return event;
 }

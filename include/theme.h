@@ -4,7 +4,8 @@
 // The base look is black glass, a dim track, a single accent colour for
 // the whole arc and the small captions, and white values.
 //
-// The accent is switchable at runtime with the board's BOOT button:
+// The accent is switchable at runtime with the board's BOOT button, the PQ
+// cruise stalk, or the CANv-gauge web page:
 // green -> orange -> red -> blue -> white -> purple -> green.
 // =====================================================================
 #pragma once
@@ -34,6 +35,7 @@ LV_FONT_DECLARE(lv_font_dash_num_72);
 #define FONT_LABEL (&lv_font_montserrat_20)
 #define FONT_SMALL (&lv_font_montserrat_16)
 #define FONT_TINY (&lv_font_montserrat_12)
+#define FONT_G (&lv_font_montserrat_40)
 
 namespace theme {
 

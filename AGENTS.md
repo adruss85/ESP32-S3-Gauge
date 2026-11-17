@@ -122,7 +122,8 @@ scale is read from NVS, so set it from the web page first if needed.
 
 `-DGAUGE_CAPTURE_GMETER=1` (with `GAUGE_CAPTURE=1`) captures the G-meter
 instead, feeding a synthetic 0.5 Hz sweep so the blob, tail and readout all
-appear. Use a distinct output prefix, e.g. `/tmp/gmeter`.
+appear. `-DGAUGE_CAPTURE_SPLASH=1` captures the boot screen at 2 s, with the
+loading rule part-filled. Use a distinct output prefix, e.g. `/tmp/gmeter`.
 
 ## Hard rules
 
@@ -174,8 +175,9 @@ appear. Use a distinct output prefix, e.g. `/tmp/gmeter`.
     `sqrt(v² + l²)` and its 1 s mean, not `(|v| + |l|) / 2`.
 12. **The G-meter mount is a setting, not an assumption in pixels.** The
     screen uses the chip's Z axis for an upright gauge and Y for a flat one;
-    `Flip accel/brake` handles a 180 degree mount. Keep both in NVS and apply
-    them through `gmeter::setMount()`.
+    `Auto` resolves that from the learned gravity vector, and `Flip
+    accel/brake` handles a 180 degree mount. Keep the setting in NVS and
+    apply it through `gmeter::setMount()`.
 13. **BOOT owns two actions.** A short press steps the accent, a 700 ms hold
     switches screens. Keep the long press firing at the threshold while the
     key is still down, and swallow its release. Do not reintroduce the old
@@ -186,10 +188,11 @@ appear. Use a distinct output prefix, e.g. `/tmp/gmeter`.
 
 | Resource | Limit / baseline | Why it matters |
 |---|---|---|
-| App flash | OTA slot is **6,553,600 B** (0x640000). 0.5.0 used **1,358,554 B (20.7%)** | Two OTA slots plus SPIFFS share 16 MB; re-measure after your change |
-| Internal RAM | **181,448 B (55.4%)** static at 0.5.0 | WiFi/ESP-NOW/AP stacks and DMA buffers need the rest |
+| App flash | OTA slot is **6,553,600 B** (0x640000). 0.5.2 used **1,387,278 B (21.2%)** | Two OTA slots plus SPIFFS share 16 MB; re-measure after your change |
+| Internal RAM | **116,632 B (35.6%)** static at 0.5.2 | WiFi/ESP-NOW/AP stacks and DMA buffers need the rest |
 | LVGL pool | **128 KB** (`LV_MEM_SIZE`), allocated from PSRAM | Keep the pool out of internal RAM |
-| Draw buffers | 2 x 360x60 RGB565 = **86,400 B** in internal RAM | Partial render mode; both must be `LV_DRAW_BUF_ALIGN` aligned |
+| Draw buffers | 1 x 360x60 RGB565 = **43,200 B** in internal RAM | One partial buffer, serialised flushes; `LV_DRAW_BUF_ALIGN` aligned |
+| G-meter canvas | **216,000 B** in PSRAM | 360x300 RGB565, one object; not static RAM |
 | QSPI clock | 80 MHz | The vendor panel sequence assumes it |
 
 Rules of thumb: no unconditional `lv_obj_invalidate`; style changes already
@@ -198,8 +201,9 @@ anti-aliased shape; do not add scrolling containers. OTA and the page are
 allowed to allocate at runtime (they are not always-on hot paths), but a
 page request must not add a full-screen repaint. For the mode fade, scale
 leaf-object opacity; a container opacity would allocate a 259 KB layer and
-fail. The G-meter tail is 20 small circles, not a canvas or a full-screen
-layer.
+fail. The G-meter's dot, tail and readout are one 360x300 canvas; its
+216,000 B buffer is PSRAM, not the LVGL pool, and only the canvas is
+invalidated when something changes. Do not go back to per-dot objects.
 
 ## Where things are (task to files)
 
@@ -208,14 +212,16 @@ layer.
 | Gauge layout, value row, ticks | `src/ui/gauge_ui.cpp`, geometry in `include/theme.h` |
 | Boost scale (min/max), tick labels | `gauge_ui::applyScale()` in `src/ui/gauge_ui.cpp` |
 | Accent schemes / BOOT short press | `src/ui/theme.cpp`, `src/hal/boot_button.cpp` (poll + 700 ms long press) |
+| Cruise stalk: Cancel+Down accent, Down-long mode | `takeSchemeEvent()` / `takeModeEvent()` in `src/net/ohx_now.cpp` |
 | Mode switch + 260 ms cross-fade | `src/ui/dashboard.cpp`, `setMode()` |
+| Boot splash + 3 s loading rule | `src/ui/splash.cpp`, `src/ui/splash_img.cpp`, `assets/canvas-gauge-splash-360-base.jpg` |
 | G-meter math (gravity, axes, 1 s average) | `src/app/gmeter.cpp` |
 | QMI8658 init + burst read | `src/hal/imu.cpp` |
-| G-meter blob, tail, readout | `src/ui/gmeter_ui.cpp`, `include/theme.h` |
+| G-meter dot, tail, readout (one canvas) | `src/ui/gmeter_ui.cpp`, `include/theme.h` |
 | Persisted scheme/scale/mode/mount (NVS) | `src/app/settings.cpp` |
 | Web page, settings API, OTA, G zero | `src/net/gauge_web.cpp` |
 | Setup AP channel policy | `hopTick()` and `setSetupAp()` in `src/net/ohx_now.cpp` |
-| Panel, QSPI, LVGL display | `src/hal/display.cpp`; vendor driver `esp_lcd_st77916.c`, sequence `st77916_init.c` |
+| Panel, QSPI, LVGL display, TE sync | `src/hal/display.cpp`; vendor driver `esp_lcd_st77916.c`, sequence `st77916_init.c` |
 | LCD reset, IMU INT expander pins | `src/hal/tca9554.cpp` (P0/P1/P2 outputs, P3/P4 inputs) |
 | ESP-NOW receive, channel scan | `src/net/ohx_now.cpp` |
 | IAT decode (`0x380` byte 1) | `handleCann()` in `src/net/ohx_now.cpp` |
@@ -230,16 +236,19 @@ layer.
 | Change type | Check |
 |---|---|
 | Any | `pio run -e esp32s3` and `pio run -e esp32dev` succeed; report size lines |
-| Layout or colour | Capture the six schemes (above) and inspect the PPMs; repeat with `GAUGE_CAPTURE_GMETER` for the G-meter |
+| Layout or colour | Capture the six schemes (above) and inspect the PPMs; repeat with `GAUGE_CAPTURE_GMETER` for the G-meter and `GAUGE_CAPTURE_SPLASH` for the boot screen |
 | Data path | Console `[gauge] ch=... OHX=.../s boost=ok IAT=ok cann=...` |
 | Web page | Join `CANv-gauge`, check `/`, `/api/status`, scheme/scale/mode/mount, Zero, and that all survive a reboot |
 | OTA | `curl -F firmware=@.pio/build/esp32s3/firmware.bin http://192.168.4.1/update`, then confirm the boot log and the new build |
 | BOOT key | Short press: `[ui] accent <name>` once. 700 ms hold: `[ui] mode g-meter`; release must not also step the accent |
+| Cruise stalk | Cancel+Down: `[ui] cruise combo` + one accent step. Down long alone: `[ui] cruise mode` + one screen switch |
 | G-meter | At rest `g` prints `avg=0.00 valid=1` and `/api/status` has `g100:0`; tilt the board to see the blob move; acceleration must move it up, braking down. In a car, use Flip if reversed |
-| G-meter math | `tools/gmeter_test.cpp` passes: 0.5 g signs, diagonal 0.707, speed gate, tilt re-learn, Zero |
+| G-meter math | `tools/gmeter_test.cpp` passes: 0.5 g signs, diagonal 0.707, speed gate, tilt re-learn, auto mount, Zero |
 | Channel behaviour | Console scan lines; `s`/`r` forces a rescan, `i` prints counters |
 | Absent values | Power the controller off: boost/IAT must become `--` on the glass and `null` in `/api/status`. With no IMU, the G readout stays `-- g` and Zero does not fake 0.00 |
 | TCA9554 | The LCD must still reset and boot after P3/P4 are left as inputs for the IMU INT pins |
+| TE sync | Boot log must say `[lcd] TE sync on` with a plausible edge count. If it says `TE not pulsing`, the flush is unsynced and the G-meter may tear |
+| Splash | `[splash] picture 360x360 in ... ms`, `[ui] splash up`, then `[ui] splash down` after 3 s; capture with `GAUGE_CAPTURE_SPLASH` |
 
 ## Conventions
 
@@ -271,16 +280,21 @@ layer.
   configured for ±4 g / 250 Hz accelerometer and ±256 dps / 250 Hz gyro.
   The 12-byte burst starts at `0x35`; the chip's internal LPF is off.
 * The whole board's power button is a **battery latch**, not a GPIO input.
-  The only user key is BOOT (GPIO0). Short press = accent, 700 ms hold =
-  G-meter; the long press fires while held and its release is swallowed.
+  The local user key is BOOT (GPIO0): short press = accent, 700 ms hold =
+  G-meter. With the CANN relay, the PQ cruise stalk also works: Cancel+Down
+  cycles the accent and Down-long alone switches screens (GRA_Down_Long,
+  bit 4 of 0x38A). The stalk generates the long bit; the gauge does not
+  time that hold.
 * The G-meter's default mount is **upright** (gauge faces the driver): the
   longitudinal axis is chip Z, lateral is chip X. **Flat** (screen up, top
   forward) uses chip Y and X. The default signs assume the QMI8658 is on the
   back of the PCB with +Z away from the glass; `Flip accel/brake` fixes a
   180 degree mount. The in-car sign/axis mapping is not yet verified.
 * The G-meter gravity tracker has a 2 s time constant and only learns while
-  the car is stationary: | |a| - 1 g | < 0.06 g, gyro < 0.2 rad/s, and
-  controller speed < 1 km/h when a fresh speed exists. The 2-axis magnitude
+  the car is stationary. A fresh controller speed below 1 km/h is trusted
+  by itself (engine vibration does not block it); without speed data the
+  IMU gate is | |a| - 1 g | < 0.06 g and gyro < 0.2 rad/s. Mount `Auto`
+  picks upright or flat from the learned gravity. The 2-axis magnitude
   is `sqrt(v² + l²)`, averaged over 100 samples (1 s at 100 Hz); the deadband
   is 0.01 g. A Zero with no IMU sample leaves the readout at `--`.
 * The mode fade scales leaf-object opacity over 260 ms. Do not use a
@@ -288,6 +302,18 @@ layer.
   Step opacity at the display rate, not loop rate: applying it every loop
   (200 Hz) overflowed the invalid-area buffer and caused full-screen
   repaints. `LV_INV_BUF_SIZE` is 128 for the G-meter tail + fade.
+* The ST77916 TE output on GPIO18 is enabled by `TEON (0x35, 0x00)` and
+  pulses once per panel frame. `display.cpp` waits for the V-blank edge
+  before a render's flushes and disables itself if the pin does not pulse.
+  The SPI panel IO queue depth is 64. The G-meter draws its dot, tail and g
+  readout into one 360x300 RGB565 canvas at y=60 and invalidates only that
+  canvas; there are no per-object dot/text boxes to flush separately. The
+  canvas buffer is 216,000 B in PSRAM.
+* The boot splash is a 360x360 baseline JPEG embedded by
+  `board_build.embed_files` and decoded by the S3 mask ROM's TJpgDec into
+  259,200 B of PSRAM (94 ms measured). Its green `lv_bar` covers the red
+  rule at x=80, y=202, 200x3 and fills over 3 s. The picture is released
+  when the splash is deleted, never kept for the dashboard.
 * IAT is `0.75 * byte1 - 48` from `Engine_3` (`0x380`), and `0xFF` means absent.
   Without a CANN sender the value stays `--`.
 * Boost is `mbar / 68.94757` PSI. On the bench the controller often sends the
