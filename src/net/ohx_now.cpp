@@ -11,7 +11,12 @@
 // channel without joining it, which is all ESP-NOW needs. If the anchor
 // disappears, the listener falls back to channel 1 and hops.
 //
-// Nothing is transmitted here: the gauge is receive-only.
+// The gauge's own setup AP (CANv-gauge) shares this radio: AP and STA must
+// be on one channel, so the AP follows this file's channel and the channel
+// is frozen while a page client is connected.
+//
+// No ESP-NOW or CAN frame is transmitted here: the gauge observes. The AP's
+// 802.11 beacons are the only RF the firmware originates.
 // =====================================================================
 #include "net/ohx_now.h"
 
@@ -25,6 +30,10 @@
 #include "app/config.h"
 #include "cannow_proto.h"
 #include "ohx_proto.h"
+
+#ifndef GAUGE_HAS_DISPLAY
+#define GAUGE_HAS_DISPLAY 0
+#endif
 
 namespace ohxnow {
 namespace {
@@ -101,6 +110,10 @@ volatile uint8_t g_channel = config::kFallbackChannel;
 volatile bool g_forceScan = false;
 bool g_enabled = false;
 
+// Upper bound for hopping. 13 with no AP; the softAP can lower it.
+uint8_t g_maxChannel = config::kMaxChannel;
+bool g_apUp = false;
+
 bool g_hopping = false;
 uint8_t g_hopChannel = config::kFallbackChannel;
 uint32_t g_hopMs = 0;
@@ -108,6 +121,7 @@ uint32_t g_forceScanUntil = 0;
 uint8_t g_printedChannel = 0;
 uint32_t g_lastScanMs = 0;
 bool g_anchorFound = false;
+bool g_pageHold = false;  // a web client is pinning the channel
 
 // Async WiFi scan state machine
 enum class ScanState { Idle, Scanning, Processing };
@@ -118,12 +132,14 @@ uint32_t g_printedStatusPackets = 0;
 bool g_printedFirstStatus = false;
 bool g_printedFirstIat = false;
 
-void setChannel(uint8_t ch) {
+bool setChannel(uint8_t ch) {
   const esp_err_t e = esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
   if (e != ESP_OK) {
     Serial.printf("[now] set_channel(%u) failed: %s\n", (unsigned)ch,
                   esp_err_to_name(e));
+    return false;
   }
+  return true;
 }
 
 int senderSlot(const uint8_t *mac) {
@@ -469,6 +485,7 @@ void processScanResults() {
 
   // Scan complete, process results
   int c6 = -1, c6Rssi = -1000, dash = -1, dashRssi = -1000;
+  int old = -1, oldRssi = -1000;
   for (int i = 0; i < n; i++) {
     const String ssid = WiFi.SSID(i);
     const int rssi = WiFi.RSSI(i);
@@ -480,15 +497,29 @@ void processScanResults() {
     } else if (ssid == config::kAnchorSSID && rssi > dashRssi) {
       dash = i;
       dashRssi = rssi;
+    } else if (ssid == config::kAnchorSSIDOld && rssi > oldRssi) {
+      old = i;
+      oldRssi = rssi;
     }
   }
 
-  const int pick = c6 >= 0 ? c6 : dash;
+  const int pick = c6 >= 0 ? c6 : (dash >= 0 ? dash : old);
   if (pick >= 0) {
-    g_channel = (uint8_t)WiFi.channel(pick);
-    g_anchorFound = true;
-    Serial.printf("[now] scan: %d APs; anchor \"%s\" ch %u (%d dBm)\n", n,
-                  WiFi.SSID(pick).c_str(), (unsigned)g_channel, WiFi.RSSI(pick));
+    const uint8_t anchorCh = (uint8_t)WiFi.channel(pick);
+    // A channel the softAP cannot use is not a channel this radio can
+    // listen on: AP+STA share one channel and the AP's country policy wins.
+    if (anchorCh > g_maxChannel) {
+      g_anchorFound = false;
+      Serial.printf("[now] scan: anchor \"%s\" ch %u above the AP limit %u\n",
+                    WiFi.SSID(pick).c_str(), (unsigned)anchorCh,
+                    (unsigned)g_maxChannel);
+    } else {
+      g_channel = anchorCh;
+      g_anchorFound = true;
+      Serial.printf("[now] scan: %d APs; anchor \"%s\" ch %u (%d dBm)\n", n,
+                    WiFi.SSID(pick).c_str(), (unsigned)g_channel,
+                    WiFi.RSSI(pick));
+    }
   } else {
     g_channel = config::kFallbackChannel;
     g_anchorFound = false;
@@ -513,6 +544,23 @@ void hopTick() {
       g_hopMs = now;
     }
     return;  // don't do other hop logic while scan completes
+  }
+
+  // A connected page client owns the radio. AP+STA share one channel, so a
+  // hop would drag the softAP with it and drop the page mid-edit. A gauge
+  // already locked on the anchor keeps receiving; an unlocked one waits for
+  // the page to close before tracking channels again.
+  if (WiFi.softAPgetStationNum() > 0) {
+    if (!g_pageHold) {
+      g_pageHold = true;
+      Serial.printf("[now] page client: holding channel %u\n",
+                    (unsigned)g_channel);
+    }
+    return;
+  }
+  if (g_pageHold) {
+    g_pageHold = false;
+    Serial.println("[now] page client gone; channel tracking resumes");
   }
 
   bool force = g_forceScan;
@@ -553,11 +601,21 @@ void hopTick() {
 
   if (g_anchorFound) return;
 
+  // A joinable softAP cannot move every 400 ms: a client's scan would miss
+  // it. With the AP up, discovery is the periodic full scan above rather
+  // than the channel walk. The cost: an anchor whose SSID is hidden cannot
+  // be found this way (see TODO.md).
+  if (g_apUp) return;
+
   if ((uint32_t)(now - g_hopMs) < config::kChannelDwellMs) return;
   g_hopMs = now;
-  g_hopChannel = (uint8_t)((g_hopChannel % config::kMaxChannel) + 1);
-  setChannel(g_hopChannel);
-  Serial.printf("[scan] channel %u\n", (unsigned)g_hopChannel);
+  g_hopChannel = (uint8_t)((g_hopChannel % g_maxChannel) + 1);
+  // Log only channels the radio actually tuned to; with the setup AP up the
+  // country policy rejects 12/13 and a "[scan] channel 12" line that did
+  // not happen reads like a working hop.
+  if (setChannel(g_hopChannel)) {
+    Serial.printf("[scan] channel %u\n", (unsigned)g_hopChannel);
+  }
 }
 
 void statusTick() {
@@ -611,14 +669,23 @@ bool begin() {
   if (g_enabled) return true;
 
   Serial.println("[now] initialising WiFi + ESP-NOW");
+  // AP+STA on the display board: the web page's softAP is started later by
+  // gauge_web::begin(), and switching modes after esp_now_init() is not
+  // worth the risk. The headless listener keeps plain STA.
+#if GAUGE_HAS_DISPLAY
+  WiFi.mode(WIFI_AP_STA);
+#else
   WiFi.mode(WIFI_STA);
+#endif
   WiFi.persistent(false);
   WiFi.disconnect(false, false);
   WiFi.setSleep(false);
 
-  // Start async scan; we'll listen on fallback channel until it completes
-  discoverChannel();
+  // Start on the family fallback channel, then look for the anchor. The
+  // channel has to be set before the async scan starts: esp_wifi_set_channel
+  // returns ESP_FAIL while a scan is running.
   setChannel(g_channel);
+  discoverChannel();
 
   const esp_err_t err = esp_now_init();
   if (err != ESP_OK) {
@@ -671,6 +738,28 @@ void poll() {
 }
 
 bool enabled() { return g_enabled; }
+
+uint8_t channel() { return g_channel; }
+
+void setChannelLimit(uint8_t maxChannel) {
+  if (maxChannel < 1) return;
+  if (maxChannel > config::kMaxChannel) maxChannel = config::kMaxChannel;
+  if (maxChannel == g_maxChannel) return;
+  g_maxChannel = maxChannel;
+  if (g_hopChannel > g_maxChannel) g_hopChannel = g_maxChannel;
+  Serial.printf("[now] hop limit is now 1-%u\n", (unsigned)g_maxChannel);
+}
+
+void setSetupAp(bool up) {
+  if (g_apUp == up) return;
+  g_apUp = up;
+  if (up) {
+    Serial.printf("[now] setup AP up: holding channel %u (scan-only discovery)\n",
+                  (unsigned)g_channel);
+  } else {
+    Serial.println("[now] setup AP down: channel walk allowed");
+  }
+}
 
 bool takeSchemeEvent() {
   taskENTER_CRITICAL(&g_mux);

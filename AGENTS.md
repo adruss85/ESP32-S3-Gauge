@@ -43,16 +43,21 @@ It is a **receive-only display client** for the OpenHaldex family:
   ESP-NOW broadcast (`include/ohx_proto.h`);
 * intake air temperature from `Engine_3` (`0x380`) in the CANN relay
   (`include/cannow_proto.h`);
-* the AP name `OpenHaldex-C6` (preferred) or `ohx-dash` supplies the WiFi
-  channel. Nothing is transmitted.
+* the AP name `OpenHaldex-C6` (preferred), or the dash's own `CANv-dash`
+  (formerly `ohx-dash`), supplies the WiFi channel. Nothing is transmitted.
 
 Stack: PlatformIO, Arduino-ESP32, LVGL 9.3, Espressif `esp_lcd`, and
 Waveshare's vendor ST77916 driver. C++ in `src/`, headers in `include/`.
 
+The QMI8658 on the control I2C bus adds a **G-meter** screen: a 2D dot
+(vertical acceleration/braking, horizontal lateral), a fading 1 s tail and a
+white 1 s two-axis magnitude readout. It is local to the board; the car link
+stays receive-only.
+
 The gauge also runs its own always-on open AP, **CANv-gauge**, serving a
-settings page (colour scheme, boost scale) and OTA firmware upload. The AP
-shares the ESP-NOW radio, so it follows the receiver's channel and is the
-only RF the firmware originates.
+settings page (colour scheme, boost scale, display mode, G-meter mount) and OTA
+firmware upload. The AP shares the ESP-NOW radio, so it follows the receiver's
+channel and is the only RF the firmware originates.
 
 `env:esp32s3` is the real display target. `env:esp32dev` is a headless CANN
 listener for bench work and builds without the display code.
@@ -90,10 +95,13 @@ curl -F "firmware=@.pio/build/esp32s3/firmware.bin" http://192.168.4.1/update
 * Display serial console: 115200 baud on `/dev/ttyACM0`. Opening it resets
   the board; `tools/monitor.py` opens once and captures the boot log.
 * Upload speed is 921600 for the S3; the WROOM's CH340 is pinned to 460800.
-* **There is no test suite.** A successful `pio run` is the only check you
-  can do without hardware. Anything touching the panel, ESP-NOW, the BOOT
-  key or IAT decoding needs the board or a car. Say clearly what was and was
-  not verified on hardware.
+* **There is no hardware test suite.** A successful `pio run` is the only
+  check you can do without hardware. Anything touching the panel, the IMU,
+  ESP-NOW, the BOOT key or IAT decoding needs the board or a car. Say clearly
+  what was and was not verified on hardware.
+* Host-only checks live in `tools/`: `gmeter_test.cpp` (filter, axes, average,
+  speed gate, zero) and `boot_button_test.cpp` (short/long/bounce). Build
+  commands are at the top of each file. They do not touch hardware.
 * After a build, report the RAM and flash lines (see Budgets).
 
 ### Capturing the glass without a camera
@@ -112,6 +120,10 @@ The capture code is compiled out of normal builds and does not write NVS.
 Add `-DGAUGE_CAPTURE_BOOST=-2.5f` to photograph a vacuum reading; a custom
 scale is read from NVS, so set it from the web page first if needed.
 
+`-DGAUGE_CAPTURE_GMETER=1` (with `GAUGE_CAPTURE=1`) captures the G-meter
+instead, feeding a synthetic 0.5 Hz sweep so the blob, tail and readout all
+appear. Use a distinct output prefix, e.g. `/tmp/gmeter`.
+
 ## Hard rules
 
 1. **Never edit `include/ohx_proto.h` or `include/cannow_proto.h`.** They are
@@ -126,7 +138,8 @@ scale is read from NVS, so set it from the web page first if needed.
    screen as unknown. A genuine `0` draws `0`. The web status JSON follows
    the same rule with `null`, and only when the reading is fresh.
 4. **The channel comes from an AP, not a compiled-in constant.** Scan for
-   `OpenHaldex-C6` first, then `ohx-dash`; fall back to channel 1 and hop only
+   `OpenHaldex-C6` first, then `CANv-dash` (then the legacy `ohx-dash`); fall
+   back to channel 1 and hop only
    while quiet. Do not hard-code a per-rig channel. The setup AP shares the
    radio, so while it is up the channel walk is disabled and the periodic
    full scan is the discovery path.
@@ -149,18 +162,32 @@ scale is read from NVS, so set it from the web page first if needed.
 9. **Honesty about verification.** Bench != car. Boost has only been seen as
    `0` or the absent sentinel; IAT has only been seen on the bench with a
    CANN sender present. Do not describe those as verified in a car.
-10. **The QSPI panel IO is asynchronous.** `lv_display_flush_ready()` belongs
-    in `on_color_trans_done`, not at the end of the flush callback. Releasing
-    the buffer early lets DMA read it while LVGL renders into it, which shows
-    up as stretched/ghosted digits. If you change the flush path, keep the
-    callback wired.
+10. **The QSPI flush is asynchronous.** LVGL must not get its buffer back
+    before the QSPI DMA transfer completes; the panel would show torn or
+    stretched content. Keep the `on_color_done` callback wired to
+    `lv_display_flush_ready`.
+11. **The G-meter zero is learned, never faked.** Gravity is removed by a
+    tracker that updates only when the car is stationary (controller speed
+    under 1 km/h when available, otherwise `| |a| - 1 g | < 0.06 g` plus a
+    quiet gyro). Do not replace it with a fixed boot offset. A Zero with no
+    IMU sample must leave the readout at `--`. The two-axis magnitude is
+    `sqrt(v² + l²)` and its 1 s mean, not `(|v| + |l|) / 2`.
+12. **The G-meter mount is a setting, not an assumption in pixels.** The
+    screen uses the chip's Z axis for an upright gauge and Y for a flat one;
+    `Flip accel/brake` handles a 180 degree mount. Keep both in NVS and apply
+    them through `gmeter::setMount()`.
+13. **BOOT owns two actions.** A short press steps the accent, a 700 ms hold
+    switches screens. Keep the long press firing at the threshold while the
+    key is still down, and swallow its release. Do not reintroduce the old
+    ISR quick-tap path: a bounce on the way into a long press would emit a
+    spurious accent change.
 
 ## Budgets: do not regress these
 
 | Resource | Limit / baseline | Why it matters |
 |---|---|---|
-| App flash | OTA slot is **6,553,600 B** (0x640000). 0.4.0 used **1,279,858 B (19.5%)** | Two OTA slots plus SPIFFS share 16 MB; re-measure after your change |
-| Internal RAM | **181,248 B (55.3%)** static at 0.4.0 | WiFi/ESP-NOW/AP stacks and DMA buffers need the rest |
+| App flash | OTA slot is **6,553,600 B** (0x640000). 0.5.0 used **1,358,554 B (20.7%)** | Two OTA slots plus SPIFFS share 16 MB; re-measure after your change |
+| Internal RAM | **181,448 B (55.4%)** static at 0.5.0 | WiFi/ESP-NOW/AP stacks and DMA buffers need the rest |
 | LVGL pool | **128 KB** (`LV_MEM_SIZE`), allocated from PSRAM | Keep the pool out of internal RAM |
 | Draw buffers | 2 x 360x60 RGB565 = **86,400 B** in internal RAM | Partial render mode; both must be `LV_DRAW_BUF_ALIGN` aligned |
 | QSPI clock | 80 MHz | The vendor panel sequence assumes it |
@@ -169,7 +196,10 @@ Rules of thumb: no unconditional `lv_obj_invalidate`; style changes already
 invalidate only the affected objects; keep the arc as the only large
 anti-aliased shape; do not add scrolling containers. OTA and the page are
 allowed to allocate at runtime (they are not always-on hot paths), but a
-page request must not add a full-screen repaint.
+page request must not add a full-screen repaint. For the mode fade, scale
+leaf-object opacity; a container opacity would allocate a 259 KB layer and
+fail. The G-meter tail is 20 small circles, not a canvas or a full-screen
+layer.
 
 ## Where things are (task to files)
 
@@ -177,31 +207,39 @@ page request must not add a full-screen repaint.
 |---|---|
 | Gauge layout, value row, ticks | `src/ui/gauge_ui.cpp`, geometry in `include/theme.h` |
 | Boost scale (min/max), tick labels | `gauge_ui::applyScale()` in `src/ui/gauge_ui.cpp` |
-| Accent schemes / BOOT cycle | `src/ui/theme.cpp`, `src/hal/boot_button.cpp` (GPIO interrupt + poll fallback) |
-| Persisted scheme + scale (NVS) | `src/app/settings.cpp` |
-| Web page, settings API, OTA | `src/net/gauge_web.cpp` |
+| Accent schemes / BOOT short press | `src/ui/theme.cpp`, `src/hal/boot_button.cpp` (poll + 700 ms long press) |
+| Mode switch + 260 ms cross-fade | `src/ui/dashboard.cpp`, `setMode()` |
+| G-meter math (gravity, axes, 1 s average) | `src/app/gmeter.cpp` |
+| QMI8658 init + burst read | `src/hal/imu.cpp` |
+| G-meter blob, tail, readout | `src/ui/gmeter_ui.cpp`, `include/theme.h` |
+| Persisted scheme/scale/mode/mount (NVS) | `src/app/settings.cpp` |
+| Web page, settings API, OTA, G zero | `src/net/gauge_web.cpp` |
 | Setup AP channel policy | `hopTick()` and `setSetupAp()` in `src/net/ohx_now.cpp` |
 | Panel, QSPI, LVGL display | `src/hal/display.cpp`; vendor driver `esp_lcd_st77916.c`, sequence `st77916_init.c` |
-| LCD reset expander | `src/hal/tca9554.cpp` (TCA9554 bit 1) |
+| LCD reset, IMU INT expander pins | `src/hal/tca9554.cpp` (P0/P1/P2 outputs, P3/P4 inputs) |
 | ESP-NOW receive, channel scan | `src/net/ohx_now.cpp` |
 | IAT decode (`0x380` byte 1) | `handleCann()` in `src/net/ohx_now.cpp` |
-| Console keys | `handleSerial()` in `src/net/ohx_now.cpp` |
+| Console keys | `handleSerial()` in `src/net/ohx_now.cpp`; `src/main.cpp` for `b`/`m`/`z`/`g`/`a` |
 | Boot banner / version | `include/version.h` |
 | Board pin map | `include/board_config.h` |
 | Frame capture | `GAUGE_CAPTURE` in `src/main.cpp`, `tools/capture_frame.py` |
+| Host math/button checks | `tools/gmeter_test.cpp`, `tools/boot_button_test.cpp`, `tools/host/` |
 
 ## How to verify a change
 
 | Change type | Check |
 |---|---|
 | Any | `pio run -e esp32s3` and `pio run -e esp32dev` succeed; report size lines |
-| Layout or colour | Capture the six schemes (above) and inspect the PPMs |
+| Layout or colour | Capture the six schemes (above) and inspect the PPMs; repeat with `GAUGE_CAPTURE_GMETER` for the G-meter |
 | Data path | Console `[gauge] ch=... OHX=.../s boost=ok IAT=ok cann=...` |
-| Web page | Join `CANv-gauge`, check `/`, `/api/status`, a scheme and a scale change, and that both survive a reboot |
+| Web page | Join `CANv-gauge`, check `/`, `/api/status`, scheme/scale/mode/mount, Zero, and that all survive a reboot |
 | OTA | `curl -F firmware=@.pio/build/esp32s3/firmware.bin http://192.168.4.1/update`, then confirm the boot log and the new build |
-| BOOT key | Press it on the board: `[ui] accent <name>` once per press |
+| BOOT key | Short press: `[ui] accent <name>` once. 700 ms hold: `[ui] mode g-meter`; release must not also step the accent |
+| G-meter | At rest `g` prints `avg=0.00 valid=1` and `/api/status` has `g100:0`; tilt the board to see the blob move; acceleration must move it up, braking down. In a car, use Flip if reversed |
+| G-meter math | `tools/gmeter_test.cpp` passes: 0.5 g signs, diagonal 0.707, speed gate, tilt re-learn, Zero |
 | Channel behaviour | Console scan lines; `s`/`r` forces a rescan, `i` prints counters |
-| Absent values | Power the controller off: boost/IAT must become `--` on the glass and `null` in `/api/status` |
+| Absent values | Power the controller off: boost/IAT must become `--` on the glass and `null` in `/api/status`. With no IMU, the G readout stays `-- g` and Zero does not fake 0.00 |
+| TCA9554 | The LCD must still reset and boot after P3/P4 are left as inputs for the IMU INT pins |
 
 ## Conventions
 
@@ -227,9 +265,29 @@ page request must not add a full-screen repaint.
 * The panel reports ID `00 02 7F 7F`; that selects Waveshare's vendor init
   sequence. The other ID path in their demo is not present on this board.
 * The LCD reset is on TCA9554 bit 1; the expander is at `0x20` on I2C
-  `SDA=11/SCL=10`.
-* The BOOT key is **GPIO0, active low**, with the internal pull-up. It is a
-  strapping pin at reset only.
+  `SDA=11/SCL=10`. P0/P1/P2 are outputs (touch reset, LCD reset, SD CS);
+  P3/P4 are the QMI8658 INT2/INT1 pins and are inputs, not driven outputs.
+* The QMI8658 answers at I2C `0x6B` (not `0x6A` on this board). It is
+  configured for ±4 g / 250 Hz accelerometer and ±256 dps / 250 Hz gyro.
+  The 12-byte burst starts at `0x35`; the chip's internal LPF is off.
+* The whole board's power button is a **battery latch**, not a GPIO input.
+  The only user key is BOOT (GPIO0). Short press = accent, 700 ms hold =
+  G-meter; the long press fires while held and its release is swallowed.
+* The G-meter's default mount is **upright** (gauge faces the driver): the
+  longitudinal axis is chip Z, lateral is chip X. **Flat** (screen up, top
+  forward) uses chip Y and X. The default signs assume the QMI8658 is on the
+  back of the PCB with +Z away from the glass; `Flip accel/brake` fixes a
+  180 degree mount. The in-car sign/axis mapping is not yet verified.
+* The G-meter gravity tracker has a 2 s time constant and only learns while
+  the car is stationary: | |a| - 1 g | < 0.06 g, gyro < 0.2 rad/s, and
+  controller speed < 1 km/h when a fresh speed exists. The 2-axis magnitude
+  is `sqrt(v² + l²)`, averaged over 100 samples (1 s at 100 Hz); the deadband
+  is 0.01 g. A Zero with no IMU sample leaves the readout at `--`.
+* The mode fade scales leaf-object opacity over 260 ms. Do not use a
+  full-screen opacity layer: 360x360 RGB565 is 259 KB and the pool is 128 KB.
+  Step opacity at the display rate, not loop rate: applying it every loop
+  (200 Hz) overflowed the invalid-area buffer and caused full-screen
+  repaints. `LV_INV_BUF_SIZE` is 128 for the G-meter tail + fade.
 * IAT is `0.75 * byte1 - 48` from `Engine_3` (`0x380`), and `0xFF` means absent.
   Without a CANN sender the value stays `--`.
 * Boost is `mbar / 68.94757` PSI. On the bench the controller often sends the
@@ -242,10 +300,10 @@ page request must not add a full-screen repaint.
 * Channel walking is disabled while the AP is up (a moving softAP cannot be
   joined); the 15 s full scan finds the controller's AP by name. A connected
   page client freezes the channel even against a forced scan.
-* Settings live in NVS namespace `gauge`, keys `scheme`, `smin`, `smax`, all
-  written with `putInt` and read with `getInt`. `getUChar` rejects the
-  four-byte record and silently returns the default.
-* OTA writes the inactive 6.25 MB slot and reboots; a 1.3 MB image took about
+* Settings live in NVS namespace `gauge`, keys `scheme`, `smin`, `smax`,
+  `mode`, `gmount`, `gflip`, all written with `putInt` and read with `getInt`.
+  `getUChar` rejects the four-byte record and silently returns the default.
+* OTA writes the inactive 6.25 MB slot and reboots; a 1.36 MB image took about
   7 s over the AP on the bench.
 * Touch (separate I2C on GPIO1/3) is not used by this firmware.
 * This repository is AI-generated and human-tested on one board. Qualify
