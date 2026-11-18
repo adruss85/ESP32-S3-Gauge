@@ -62,6 +62,12 @@ channel and is the only RF the firmware originates.
 `env:esp32s3` is the real display target. `env:esp32dev` is a headless CANN
 listener for bench work and builds without the display code.
 
+**The 1.85 unit's panel has failed**, so there is no working glass to test
+against right now. The researched replacement is the
+**ESP32-S3-Touch-AMOLED-1.75**, with touch enabled; the note is
+`docs/board-port-amoled-175.md`. No code has moved to it and none should until
+the unit is in hand.
+
 ## Out of scope
 
 The **OpenHaldex-C6 controller firmware** and the **bodycan sender** are
@@ -267,6 +273,7 @@ invalidated when something changes. Do not go back to per-dot objects.
 | `README.md` | Overview, hardware, build/flash, gauge layout, repository layout, licence |
 | `docs/status.md` | What is verified where, current build size |
 | `TODO.md` | What is deliberately unbuilt or waiting on hardware |
+| `docs/board-port-amoled-175.md` | The researched ESP32-S3-Touch-AMOLED-1.75 move (not implemented) |
 | `AGENTS.md` | This file |
 
 ## Known hardware and environment facts

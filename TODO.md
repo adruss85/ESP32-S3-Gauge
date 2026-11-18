@@ -37,8 +37,16 @@ Open items for the gauge. Finished work lives in `include/version.h` and
       stalk's GRA_Down_Long bit; verify that bit in a car capture.
 - [ ] **Soak test** for at least an hour with ESP-NOW traffic, the display and
       the G-meter running; watch free internal RAM and PSRAM.
-- [ ] Decide whether the touch panel (separate I2C on GPIO1/3) is ever used.
-      It is wired on the board but this firmware ignores it.
+- [ ] **Board move to the ESP32-S3-Touch-AMOLED-1.75.** The 1.85 unit's panel
+      has failed. The replacement is the 466x466 CO5300 AMOLED board (AXP2101
+      PMIC, CST9217 touch). The research note is
+      [`docs/board-port-amoled-175.md`](docs/board-port-amoled-175.md); no code
+      has moved and nothing will until the unit is in hand. Nothing in that
+      note has been measured on hardware.
+- [x] **Touch is used.** Decided: the CST9217 on the AMOLED board becomes an
+      LVGL input device. What a tap does is still open — see the port note and
+      the touch item under "Firmware behaviour". The 1.85's separate touch bus
+      on GPIO1/3 was never wired into this firmware.
 
 ## 2. Firmware behaviour
 
@@ -58,6 +66,11 @@ Open items for the gauge. Finished work lives in `include/version.h` and
       (`sqrt(v² + l²)`, 1 s mean), 50 px blob, 1 s tail, white readout, web +
       BOOT long-press mode switch with a 260 ms cross-fade. Mount/flip/zero
       are stored or explicit.
+- [ ] **Touch tap behaviour.** Enabled on the AMOLED board, but a tap has no
+      defined action yet. Decide what it does without duplicating BOOT short
+      (accent) / long (screen), whether it wakes a dimmed screen, and how to
+      avoid an accidental tap changing a stored setting. Keep it local: the
+      car link stays receive-only.
 - [ ] **G-meter filter tuning.** Revisit the 8 Hz low-pass, the 0.06 g /
       0.2 rad/s fallback gate and the 2 s gravity constant after real road
       data. The speed gate and auto mount are host/bench-tested only.

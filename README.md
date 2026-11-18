@@ -68,7 +68,17 @@ does not touch the car's network.
 | Power button | battery latch, not a GPIO input (see below) |
 | Bench listener | Plain ESP32-WROOM devkit (`env:esp32dev`) |
 
-Touch is wired on a separate bus (GPIO1/3) and is not used.
+Touch on this board is wired on a separate bus (GPIO1/3) and is not used.
+
+### Board status
+
+This unit's panel has failed. The firmware is being moved to a Waveshare
+**ESP32-S3-Touch-AMOLED-1.75** (466x466 CO5300 AMOLED, AXP2101 PMIC, CST9217
+touch), and **touch will be enabled** on it. That work is **researched only**:
+no code has changed and the firmware still targets the 1.85. The port note —
+pin map, CO5300 quirks, 360→466 relayout, touch and power — is
+[`docs/board-port-amoled-175.md`](docs/board-port-amoled-175.md). Nothing in
+the table above describes the new board.
 
 ## G-meter mode
 
@@ -351,6 +361,8 @@ TODO.md      open hardware and firmware items
   still unverified, and the current build size.
 - [`TODO.md`](TODO.md) — open items, including the first in-car G-meter test
   and the physical BOOT long-press check.
+- [`docs/board-port-amoled-175.md`](docs/board-port-amoled-175.md) — the
+  researched (unimplemented) move to the ESP32-S3-Touch-AMOLED-1.75.
 - [`AGENTS.md`](AGENTS.md) — conventions, hard rules and where to change what.
 
 ## Credits

@@ -1,6 +1,14 @@
 # Status
 
-Last updated: 17 Nov 2026, firmware **0.5.2**.
+Last updated: 18 Nov 2026, firmware **0.5.2**.
+
+> **Hardware state.** The ESP32-S3-LCD-1.85 that this firmware was developed
+> against has a **failed panel**, so nothing new has been measured on glass
+> since 0.5.2. The replacement board is a Waveshare **ESP32-S3-Touch-AMOLED-1.75**;
+> moving the firmware to it is **researched only** — see
+> [`docs/board-port-amoled-175.md`](board-port-amoled-175.md). No code has been
+> changed for it, and nothing in that note has been measured on hardware. The
+> firmware in this tree still targets the 1.85.
 
 ## Verified on the bench
 
@@ -215,6 +223,10 @@ Last updated: 17 Nov 2026, firmware **0.5.2**.
   the move was not observed. In the car the controller's AP is channel 1.
 * **Hidden anchor SSID.** With the AP up, discovery is by name only, so a
   controller AP with a hidden SSID would not be found (see `TODO.md`).
+* **ESP32-S3-Touch-AMOLED-1.75 port.** Nothing has run on that board. The
+  panel driver, pin map, 466 px relayout, touch and the IMU axes are all
+  untested; the note lists what has to be checked first. The current 1.85
+  panel failure means there is no working glass to compare against either.
 * **Long-run stability.** No soak test past a few minutes; PSRAM pool and
   internal RAM have not been watched over hours. The page reported about
   121 KB free heap with one client associated.
