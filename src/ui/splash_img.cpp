@@ -25,15 +25,15 @@
 // defines these. The linker drops the data again unless something refers to
 // it, which is why the aliases live here and nowhere else.
 extern const uint8_t splash_jpg_start[]
-    asm("_binary_assets_canvas_gauge_splash_360_base_jpg_start");
+    asm("_binary_assets_canvas_gauge_splash_466_base_jpg_start");
 extern const uint8_t splash_jpg_end[]
-    asm("_binary_assets_canvas_gauge_splash_360_base_jpg_end");
+    asm("_binary_assets_canvas_gauge_splash_466_base_jpg_end");
 
 namespace splashimg {
 namespace {
 
-constexpr int kWidth = 360;
-constexpr int kHeight = 360;
+constexpr int kWidth = 466;
+constexpr int kHeight = 466;
 constexpr size_t kImageBytes = (size_t)kWidth * (size_t)kHeight * 2;
 
 // TJpgDec's pool: Huffman and quantisation tables plus the IDCT / colour

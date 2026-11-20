@@ -1,14 +1,15 @@
 // =====================================================================
 // splash.cpp - the boot screen: CANvas splash art plus a 3 s loading rule
 //
-// The artwork is a pre-rendered 360x360 JPEG (assets/canvas-gauge-splash-
-// 360-base.jpg). Its red underline is the empty loading track; the green
+// The artwork is a pre-rendered 466x466 JPEG (assets/canvas-gauge-splash-
+// 466-base.jpg, the 360 px original upscaled by 466/360 when the gauge moved
+// to the AMOLED panel). Its underline is the empty loading track; the green
 // lv_bar sits exactly on it with a transparent track, so the fill advances
-// over the artwork without repainting the picture. The 200x3 rule is at
-// x=80, y=202, measured from the asset.
+// over the artwork without repainting the picture. The 258x4 rule is at
+// x=104, y=262, measured from the asset.
 //
 // The splash owns the glass for three seconds and is then deleted, not
-// hidden: its widgets go back to the LVGL pool and its 253 KB RGB565 PSRAM
+// hidden: its widgets go back to the LVGL pool and its 434 KB RGB565 PSRAM
 // picture is freed for the dashboard.
 // =====================================================================
 #include "ui/splash.h"
@@ -17,6 +18,7 @@
 #include <lvgl.h>
 #include <stdio.h>
 
+#include "board_config.h"
 #include "theme.h"
 #include "ui/splash_img.h"
 #include "version.h"
@@ -25,10 +27,10 @@ namespace splash {
 namespace {
 
 constexpr uint32_t kSplashMs = 3000;
-constexpr int kBarX = 80;
-constexpr int kBarY = 202;
-constexpr int kBarW = 200;
-constexpr int kBarH = 3;
+constexpr int kBarX = 104;
+constexpr int kBarY = 262;
+constexpr int kBarW = 258;
+constexpr int kBarH = 4;
 
 lv_obj_t *g_root = nullptr;
 lv_obj_t *g_bar = nullptr;
@@ -43,14 +45,14 @@ void buildFallback(lv_obj_t *root) {
   lv_label_set_text(word, "CANvas");
   lv_obj_set_style_text_font(word, FONT_G, 0);
   lv_obj_set_style_text_color(word, COL_FG, 0);
-  lv_obj_align(word, LV_ALIGN_CENTER, 0, -34);
+  lv_obj_align(word, LV_ALIGN_CENTER, 0, -44);
 
   lv_obj_t *tag = lv_label_create(root);
   lv_label_set_text(tag, "gauge");
   lv_obj_set_style_text_font(tag, FONT_LABEL, 0);
   lv_obj_set_style_text_color(tag, COL_DIM, 0);
   lv_obj_set_style_text_letter_space(tag, 6, 0);
-  lv_obj_align(tag, LV_ALIGN_CENTER, 0, 14);
+  lv_obj_align(tag, LV_ALIGN_CENTER, 0, 18);
 }
 
 }  // namespace
@@ -60,7 +62,7 @@ void begin() {
 
   lv_obj_t *scr = lv_screen_active();
   g_root = lv_obj_create(scr);
-  lv_obj_set_size(g_root, 360, 360);
+  lv_obj_set_size(g_root, LCD_H_RES, LCD_V_RES);
   lv_obj_set_pos(g_root, 0, 0);
   lv_obj_set_style_bg_color(g_root, COL_BG, 0);
   lv_obj_set_style_bg_opa(g_root, LV_OPA_COVER, 0);
@@ -102,7 +104,7 @@ void begin() {
   lv_label_set_text(ver, vbuf);
   lv_obj_set_style_text_font(ver, FONT_SMALL, 0);
   lv_obj_set_style_text_color(ver, COL_DIM, 0);
-  lv_obj_align(ver, LV_ALIGN_BOTTOM_RIGHT, -12, -10);
+  lv_obj_align(ver, LV_ALIGN_BOTTOM_RIGHT, -16, -13);
 
   g_startMs = millis();
   g_lastPct = 0;

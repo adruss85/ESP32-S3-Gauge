@@ -5,48 +5,53 @@ Open items for the gauge. Finished work lives in `include/version.h` and
 
 ## 1. Hardware and car
 
+- [ ] **Touch on the glass.** No finger has been on the panel through this
+      firmware. Confirm a tap steps the scheme once, a swipe left and a swipe
+      right each slide once, and `t` logs the corner you touched (that is the
+      mirror-flag check). Decide whether a tap should wake a dimmed screen and
+      whether the round edge should reject touches outside the circle.
+- [ ] **Slide animation, watched.** The 280 ms swipe push ran without a crash
+      but was not watched frame by frame; check it does not tear on the glass.
+- [ ] **AMOLED burn-in.** A fixed arc, ticks and captions are lit for hours.
+      Watch for ghosting after long sessions; if it appears, add an idle
+      screen-off or a pixel shift after a period without `OHX_STATUS`.
+- [ ] **AMOLED brightness curve.** 85% day and `5 + 60 x 58s/100` night are a
+      ported starting point, not measured on an emissive panel. Check night
+      levels for flicker/banding and that the dash dimmer still maps sensibly.
 - [ ] **In-car test.** Boot from the car, confirm boost follows the manifold
       (not just `0`/`--`) and IAT follows the intake sensor. Bench != car.
-      The boost display sweep itself is clean and responsive in the car.
+      Nothing has been in a car on the AMOLED board.
 - [ ] **First G-meter drive.** Confirm the blob moves **up** under
-      acceleration and **down** under braking, and that the white average
+      acceleration and **down** under braking, and that the average
       reacts to a known pull. If the direction is reversed, tick
       **Flip accel/brake** on the web page; **Mount Auto** should pick
       upright or flat from gravity, with the explicit setting for an angled
-      mount. No real acceleration has been applied on the bench.
+      mount. The QMI8658 sits differently on this PCB, so the axis defaults
+      are inherited rather than re-derived.
 - [ ] **G-meter accuracy.** Compare the 1 s average with a phone/dragy over a
       few 0.3-0.8 g pulls. The filter and axis signs are only host-tested so
       far; a known reference would validate the scale.
 - [ ] **BOOT long press, physically.** Hold BOOT for 700 ms and confirm
       `[ui] mode g-meter` appears exactly once and the fade runs; release
-      must not also step the accent. The state machine is host-tested, but
-      the key has not been held on the board since the ISR was removed.
+      must not also step the scheme. The state machine is host-tested, but
+      the key has not been held on this board.
 - [ ] **G-meter zero drift over a drive.** Park on a slope, drive, return,
-      and check the readout returns to 0.00 without pressing Zero. The
-      gravity tracker now trusts controller speed 0 at standstill; verify
-      that engine vibration no longer freezes the zero.
-- [ ] **TE-synced G-meter on the glass.** The boot log confirms the TE
-      signal, but watch the dot move and confirm the tearing/ghosting is
-      gone. If not, the remaining step is a full-frame/TE-locked flush.
+      and check the readout returns to 0.00 without pressing Zero.
 - [ ] **Splash on the glass.** The framebuffer capture is clean; confirm the
       3 s rule and version label read well at the panel's real brightness.
 - [ ] **Cruise-stalk accent combo.** Press Cancel + Down together on the PQ
-      stalk and confirm it changes the accent exactly once (`[ui] cruise combo`).
+      stalk and confirm it changes the scheme exactly once
+      (`[ui] cruise combo`).
 - [ ] **Cruise-stalk mode switch.** Hold Down alone; confirm
       `[ui] cruise mode` and one screen switch. The gauge relies on the
       stalk's GRA_Down_Long bit; verify that bit in a car capture.
 - [ ] **Soak test** for at least an hour with ESP-NOW traffic, the display and
-      the G-meter running; watch free internal RAM and PSRAM.
-- [ ] **Board move to the ESP32-S3-Touch-AMOLED-1.75.** The 1.85 unit's panel
-      has failed. The replacement is the 466x466 CO5300 AMOLED board (AXP2101
-      PMIC, CST9217 touch). The research note is
-      [`docs/board-port-amoled-175.md`](docs/board-port-amoled-175.md); no code
-      has moved and nothing will until the unit is in hand. Nothing in that
-      note has been measured on hardware.
-- [x] **Touch is used.** Decided: the CST9217 on the AMOLED board becomes an
-      LVGL input device. What a tap does is still open — see the port note and
-      the touch item under "Firmware behaviour". The 1.85's separate touch bus
-      on GPIO1/3 was never wired into this firmware.
+      the G-meter running; watch free internal RAM and PSRAM, and the panel at
+      80 MHz QSPI.
+- [x] **Board move to the ESP32-S3-Touch-AMOLED-1.75.** Done in 0.6.0: CO5300
+      panel, GPIO39 reset, emission brightness, 466 px relayout, CST9217
+      touch, seven schemes. See `docs/board-port-amoled-175.md` for what the
+      bench corrected (the RGB565 byte order above all).
 
 ## 2. Firmware behaviour
 
@@ -66,11 +71,15 @@ Open items for the gauge. Finished work lives in `include/version.h` and
       (`sqrt(v² + l²)`, 1 s mean), 50 px blob, 1 s tail, white readout, web +
       BOOT long-press mode switch with a 260 ms cross-fade. Mount/flip/zero
       are stored or explicit.
-- [ ] **Touch tap behaviour.** Enabled on the AMOLED board, but a tap has no
-      defined action yet. Decide what it does without duplicating BOOT short
-      (accent) / long (screen), whether it wakes a dimmed screen, and how to
-      avoid an accidental tap changing a stored setting. Keep it local: the
-      car link stays receive-only.
+- [x] **Touch gestures.** A tap steps the colour scheme, a horizontal swipe
+      slides to the other screen with a 280 ms push. Classified in
+      `src/hal/touch.cpp`, delivered through `dashboard::onGesture()`, refused
+      while the splash is up or a transition is running. The CST9217 is also
+      registered as an LVGL pointer indev.
+- [x] **Seven colour schemes.** Copied from `OpenHaldex-S3-Dash` in its order
+      (Midnight, Orange, Green, Blue, Purple, White, Red) so the gauge and the
+      dashboard match. Midnight is the default and the order is a wire format;
+      a scheme stored by the 1.85 build is migrated once.
 - [ ] **G-meter filter tuning.** Revisit the 8 Hz low-pass, the 0.06 g /
       0.2 rad/s fallback gate and the 2 s gravity constant after real road
       data. The speed gate and auto mount are host/bench-tested only.

@@ -16,7 +16,7 @@
 namespace settings {
 
 struct Values {
-  uint8_t scheme;   // index into theme::Scheme, 0 = green
+  uint8_t scheme;   // index into theme::Scheme, 0 = Midnight
   int16_t min10;    // scale minimum, tenths of a PSI
   int16_t max10;    // scale maximum, tenths of a PSI
   uint8_t mode;     // 0 = boost gauge, 1 = G-meter
@@ -25,13 +25,17 @@ struct Values {
 };
 
 // Load from NVS and validate. Safe to call once from setup(); a missing or
-// corrupt record falls back to green / 0-25 PSI / boost gauge / upright.
+// corrupt record falls back to Midnight / 0-25 PSI / boost gauge / upright.
+// A record written by the 1.85 build is migrated to the seven-scheme order.
 void begin();
 
 const Values &get();
 
-// Persist a scheme index. Out-of-range indexes are rejected (the caller owns
-// the real scheme count).
+// How many schemes theme.h defines. Updated with the palette table; kept here
+// so this module and the headless build do not have to include LVGL.
+inline constexpr uint8_t kSchemeCount = 7;
+
+// Persist a scheme index. Out-of-range indexes are rejected.
 bool setScheme(uint8_t scheme);
 
 // Persist a scale. Rejected unless it is inside the limits below and the

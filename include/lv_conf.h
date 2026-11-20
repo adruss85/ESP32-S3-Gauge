@@ -37,8 +37,9 @@
    leaves internal RAM for WiFi/ESP-NOW and the SPI draw buffers. */
 #define LV_USE_STDLIB_MALLOC LV_STDLIB_BUILTIN
 #if defined(GAUGE_CAPTURE) && GAUGE_CAPTURE
-/* Snapshot capture needs a full 360x360 RGB565 image in the pool. */
-#define LV_MEM_SIZE (512U * 1024U)
+/* Snapshot capture needs a full 466x466 RGB565 image in the pool
+   (434 KB) plus the buffers LVGL allocates around it. */
+#define LV_MEM_SIZE (1024U * 1024U)
 #else
 #define LV_MEM_SIZE (128U * 1024U)
 #endif
@@ -65,21 +66,24 @@ void ohx_lv_assert_handler(const char *file, int line);
 /*====================
    FONTS
  *====================*/
-/* The big boost value is the 72 px Montserrat Bold subset generated from
-   OpenHaldex-S3-Dash's face (digits and the decimal point). The labels and
-   the IAT value use LVGL's stock Montserrat faces, same typeface. */
-#define LV_FONT_MONTSERRAT_12 1
-#define LV_FONT_MONTSERRAT_14 1
-#define LV_FONT_MONTSERRAT_16 1
-#define LV_FONT_MONTSERRAT_18 1
-#define LV_FONT_MONTSERRAT_20 1
+/* The big boost value is the 96 px Montserrat Bold subset copied from
+   OpenHaldex-S3-Dash (digits, '.' and '-'). The labels and the IAT value use
+   LVGL's stock Montserrat faces, same typeface. Sizes are the 1.85 build's
+   12/16/20/24/40 scaled by 466/360 and rounded to the nearest stock size. */
+#define LV_FONT_MONTSERRAT_12 0
+#define LV_FONT_MONTSERRAT_14 0
+#define LV_FONT_MONTSERRAT_16 1   /* FONT_TINY, the boot version line */
+#define LV_FONT_MONTSERRAT_18 0
+#define LV_FONT_MONTSERRAT_20 1   /* FONT_SMALL, tick labels and IAT caption */
 #define LV_FONT_MONTSERRAT_22 0
-#define LV_FONT_MONTSERRAT_24 1
+#define LV_FONT_MONTSERRAT_24 0
+#define LV_FONT_MONTSERRAT_26 1   /* FONT_LABEL, "BOOST PSI" */
 #define LV_FONT_MONTSERRAT_28 0
-#define LV_FONT_MONTSERRAT_40 1
-#define LV_FONT_MONTSERRAT_48 0
+#define LV_FONT_MONTSERRAT_30 1   /* FONT_IAT, the temperature */
+#define LV_FONT_MONTSERRAT_40 0
+#define LV_FONT_MONTSERRAT_48 1   /* FONT_G, the G-meter readout */
 
-#define LV_FONT_DEFAULT &lv_font_montserrat_14
+#define LV_FONT_DEFAULT &lv_font_montserrat_20
 
 /* The 72 px face is RLE-compressed by lv_font_conv. Without this the
    glyph bitmap lookup returns NULL and text drawing faults. */

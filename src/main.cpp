@@ -37,6 +37,7 @@
 #include "hal/boot_button.h"
 #include "hal/display.h"
 #include "hal/imu.h"
+#include "hal/touch.h"
 #include "theme.h"
 #include "ui/dashboard.h"
 #include "ui/gauge_ui.h"
@@ -48,7 +49,7 @@
 
 #if GAUGE_CAPTURE && GAUGE_HAS_DISPLAY
 // Verification aid: render the gauge with a fixed reading, once per colour
-// scheme, and stream each 360x360 RGB565 framebuffer over USB as raw bytes
+// scheme, and stream each 466x466 RGB565 framebuffer over USB as raw bytes
 // after a one-line header. Never compiled into a normal build.
 namespace {
 
@@ -107,8 +108,10 @@ void setup() {
   if (!display::begin()) {
     Serial.println("[lcd] display init failed - continuing headless");
   } else {
-    // display::begin() owns Wire(), so the IMU is probed after it.
+    // display::begin() owns Wire(), so the IMU and the touch controller are
+    // probed after it - they share that bus.
     imu::begin();
+    touch::begin();
     dashboard::begin();
 #if GAUGE_CAPTURE
     // The capture sweep photographs the boost gauge, never a stored
@@ -121,7 +124,7 @@ void setup() {
     // covers the JPEG decode and the first WiFi/ESP-NOW setup.
     splash::begin();
     boot_button::begin();
-    Serial.printf("[ui] accent %s (short press cycles, long press = G-meter)\n",
+    Serial.printf("[ui] accent %s (BOOT: short = scheme, long = screen; touch: tap = scheme, swipe = screen)\n",
                   theme::schemeName());
   }
 #endif
@@ -140,6 +143,7 @@ void setup() {
 void loop() {
 #if GAUGE_HAS_DISPLAY
   // Console fallbacks for the same actions as the BOOT key.
+  static bool touchDebug = false;
   if (Serial.available() > 0) {
     const int key = Serial.peek();
     if (key == 'b') {
@@ -151,12 +155,34 @@ void loop() {
     } else if (key == 'z') {
       Serial.read();
       dashboard::zeroG();
+    } else if (key == 't') {
+      Serial.read();
+      touchDebug = !touchDebug;
+      Serial.printf("[touch] point log %s\n", touchDebug ? "on" : "off");
     } else if (key == 'g') {
       Serial.read();
       const gmeter::Reading &r = gmeter::reading();
       Serial.printf("[g] v=%+.2f lat=%+.2f avg=%.2f valid=%u\n",
                     (double)r.vertical, (double)r.lateral,
                     (double)r.average, r.valid ? 1u : 0u);
+    }
+  }
+
+  // 't' logs the touch point after the board's mirror settings have been
+  // applied, which is the check that mirror_x/mirror_y in board_config.h are
+  // right: tap a known corner and read the coordinate.
+  if (touchDebug && touch::ready()) {
+    static uint32_t lastTouchLog = 0;
+    const uint32_t nowTouch = millis();
+    if ((uint32_t)(nowTouch - lastTouchLog) >= 200) {
+      lastTouchLog = nowTouch;
+      uint16_t tx = 0;
+      uint16_t ty = 0;
+      bool pressed = false;
+      touch::lastPoint(tx, ty, pressed);
+      if (pressed) {
+        Serial.printf("[touch] mapped %u,%u\n", (unsigned)tx, (unsigned)ty);
+      }
     }
   }
 
@@ -188,6 +214,7 @@ void loop() {
   ohxnow::poll();
 #if GAUGE_HAS_DISPLAY
   gauge_web::poll();
+  touch::poll();
 #endif
 
 #if GAUGE_HAS_DISPLAY
@@ -198,13 +225,13 @@ void loop() {
   splash::update();
   display::loop();
 
-  // The panel is kept dark through init and the splash JPEG decode. Turn
-  // the backlight on after the first frame has been queued, so boot noise
+  // The panel is kept dark through init and the splash JPEG decode. Raise
+  // the AMOLED emission after the first frame has been queued, so boot noise
   // in GRAM is not shown.
   static bool backlightOn = false;
   if (!backlightOn && display::ready()) {
     backlightOn = true;
-    display::setBacklight(LCD_BACKLIGHT_DAY_PCT);
+    display::setBacklight(LCD_BRIGHTNESS_DAY_PCT);
   }
 
   const boot_button::Event button = boot_button::poll();

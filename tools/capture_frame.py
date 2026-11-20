@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture the gauge framebuffer from a GAUGE_CAPTURE build.
 
-The firmware renders once per accent scheme and streams each 360x360 RGB565
+The firmware renders once per colour scheme and streams each 466x466 RGB565
 frame over the USB CDC port after a header line:
 
     [shot] <index> <width> <height> <stride> <bytes>
@@ -14,7 +14,7 @@ This script reads those frames and writes one PPM per scheme. Build with:
 Usage:
     python tools/capture_frame.py [PORT] [OUT_PREFIX] [COUNT]
 
-Defaults: /dev/ttyACM0, gauge, 6 (one per scheme).
+Defaults: /dev/ttyACM0, gauge, 7 (one per scheme).
 """
 import re
 import sys
@@ -23,7 +23,7 @@ import time
 import serial
 
 SHOT = re.compile(rb"\[shot\] (\d+) (\d+) (\d+) (\d+) (\d+)\r?\n")
-SCHEMES = ["green", "orange", "red", "blue", "white", "purple"]
+SCHEMES = ["midnight", "orange", "green", "blue", "purple", "white", "red"]
 
 
 def write_ppm(path: str, raw: bytes, width: int, height: int) -> None:
@@ -44,7 +44,7 @@ def main() -> int:
     count = int(sys.argv[3]) if len(sys.argv) > 3 else len(SCHEMES)
 
     # Do not pulse RTS: the capture happens after boot, and a reset would
-    # restart the six-frame sequence.
+    # restart the seven-frame sequence.
     ser = serial.Serial(port, 115200, timeout=0.2)
     ser.dtr = False
     ser.rts = False

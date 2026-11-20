@@ -11,10 +11,10 @@ void create();
 // Push the latest telemetry + link stats into the widgets. Safe to call every ~50 ms.
 void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s);
 
-// Accent colour control, driven by the BOOT key, the cruise stalk or the
-// web page. Both entry points persist the new scheme in NVS; setScheme()
-// takes persist=false for the capture sweep, which must not change settings.
-void nextScheme();
+// Colour scheme, applied to this module only. The cycling and the NVS write
+// live in dashboard::nextScheme(); this is the leaf that repaints, so there is
+// one place that steps the scheme and one place that persists it.
+// persist=false is the capture sweep, which must not change settings.
 void setScheme(theme::Scheme s, bool persist = true);
 
 // Show/hide the whole gauge and fade it. The dashboard uses these during
@@ -22,6 +22,11 @@ void setScheme(theme::Scheme s, bool persist = true);
 // would not fit the LVGL pool.
 void setVisible(bool visible);
 void setOpacity(uint8_t opacity);
+
+// Horizontal offset in pixels, used to slide the gauge in and out during a
+// swipe. 0 is the resting position.
+void setSlide(int dx);
+int slide();
 
 // Readout scale in tenths of a PSI, e.g. 0..250 for the stock 0-25 PSI arc.
 // Re-labels the six ticks, re-ranges the arc and redraws the value on the

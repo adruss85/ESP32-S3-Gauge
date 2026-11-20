@@ -89,9 +89,11 @@ bool begin() {
   g_ready = false;
   g_addr = 0;
 
-  // 0x6A is the SA0-low address; Waveshare's own example uses 0x6B.  The
-  // board's schematic is not explicit about the strap, so try both.
-  if (!probe(BOARD_IMU_ADDR_A) && !probe(BOARD_IMU_ADDR_B)) {
+  // 0x6B is what both this AMOLED board and the 1.85 board answer on; 0x6A
+  // is the SA0-low alternative. Try the one that is fitted first: probing a
+  // missing address makes the I2C driver log an error before the fallback,
+  // which reads like a fault in a boot log that is otherwise clean.
+  if (!probe(BOARD_IMU_ADDR_B) && !probe(BOARD_IMU_ADDR_A)) {
     g_addr = 0;
     Serial.println("[imu] no QMI8658 at 0x6A or 0x6B");
     return false;

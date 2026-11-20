@@ -137,8 +137,8 @@ slot and reboots; the image it is running is never overwritten.</p></div>
 <h2>Live</h2><div class=card><pre id=live>&mdash;</pre></div>
 
 <script>
-var N=["green","orange","red","blue","white","purple"],
-    C=["#22c55e","#f59e0b","#ef4444","#3b82f6","#f2f5f8","#a855f7"],
+var N=["Midnight","Orange","Green","Blue","Purple","White","Red"],
+    C=["#22c55e","#f59e0b","#22c55e","#3b82f6","#a855f7","#7c8894","#ef4444"],
     busy=false,mountTouched=false;
 function $(id){return document.getElementById(id)}
 function msg(id,ok,text){$(id).innerHTML='<span class='+(ok?"ok":"bad")+'>'+text+'</span>'}
@@ -297,11 +297,11 @@ void handleScheme() {
     return;
   }
   // String::toInt() maps anything non-numeric to 0, which would silently
-  // select green. Accept exactly one digit.
+  // select Midnight. Accept exactly one digit.
   const String arg = g_server.arg("s");
   if (arg.length() != 1 || arg[0] < '0' ||
       arg[0] >= '0' + (char)theme::Scheme::Count) {
-    reject("scheme must be 0-5");
+    reject("scheme must be 0-6");
     return;
   }
   const int n = arg[0] - '0';

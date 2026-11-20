@@ -1,27 +1,39 @@
 # Board port: ESP32-S3-Touch-AMOLED-1.75
 
-Status: **research note, no code changed.** The firmware in this tree still
-targets the Waveshare ESP32-S3-LCD-1.85. This document records what a move to
-the **ESP32-S3-Touch-AMOLED-1.75** would involve, so the work can start when
-the unit arrives.
+Status: **implemented in 0.6.0 and running on the board.** The firmware in this
+tree targets the **ESP32-S3-Touch-AMOLED-1.75**; the 1.85 pin map, the
+TCA9554 LCD reset and the 72 px value face are in git history.
 
-Written 18 Nov 2026 from Waveshare's product wiki, hardware reference,
-schematic and BSP sources, and Espressif's `esp_lcd_co5300` driver. **Nothing
-in this document has been measured on the AMOLED board.** The 1.85 unit that
-this repository was developed against has a failed panel.
+This document began on 18 Nov 2026 as a research note written from
+Waveshare's product wiki, hardware reference, schematic and BSP sources, plus
+Espressif's `esp_lcd_co5300` driver — before the board was in hand. It is kept
+because the parts that were *wrong* are the useful part: three assumptions had
+to be corrected on the bench, and they are recorded below with what the glass
+actually did.
+
+## What the bench corrected
+
+| Assumption | Reality |
+|---|---|
+| "The CO5300 takes RGB565 little-endian, like LVGL renders" | **Wrong.** It latches the high byte first, like the ST77916. Without the swap, white text draws light green, the green arc dark green and the near-black arc track **pink** (`0x10C3` → `0xC310`). The swap loop is back in `flushCb`. A framebuffer capture cannot catch this: it snapshots LVGL's buffer, not the wire. |
+| "A 96 px value face is 466/360 of the 72 px one, so copy the dash's" | Right about the size, wrong about the glyph set: the dash's 96 px face is digits and `-` only, so the decimal point rendered as a hollow box. Regenerated with `.` included (`src/ui/font_num_96.c`). |
+| "Probe the IMU at 0x6A first, then 0x6B" | Harmless but noisy: the missing address makes the I2C driver log `ESP_ERR_INVALID_STATE` before the fallback answers. Probes 0x6B first now. |
+
+The CO5300 init sequence also had to be Waveshare's own rather than
+esp-iot-solution's default: the generic table's column window comes up shifted
+on this glass, and this panel's visible area starts at controller column 6.
 
 ## Decisions
 
 | Decision | State |
 |---|---|
 | Target board | ESP32-S3-Touch-AMOLED-1.75 (standard, not `-B` case, not `-G` GPS) |
-| Touch | **Enabled** — the CST9217 will be used as an input device |
-| Keep the 1.85 build target | **Open.** Recommendation: replace it, leave the old pin map in git history |
-| Timing | Do not start until the board is in hand |
+| Touch | **Enabled** — the CST9217 is an input device: tap = colour scheme, horizontal swipe = other screen |
+| Keep the 1.85 build target | **Replaced.** One display target; the old pin map stays in git history |
+| Timing | Done: the board arrived and the port is on it |
 
-Touch is a new input path, so it needs its own UI decision (what a tap does)
-before implementation. It must stay local to the gauge: the car link remains
-receive-only (hard rule 2).
+Touch stayed local to the gauge, so the car link is still receive-only
+(hard rule 2).
 
 ## What the board is
 
@@ -64,39 +76,49 @@ pin map, and re-validating the IMU axes.
 
 1. **Column gap.** The visible 466 columns start at column 6 of a 480-wide
    controller RAM. Call `esp_lcd_panel_set_gap(panel, 6, 0)`; the vendor init
-   window is `0x2A = 00 06 01 D7`, `0x2B = 00 00 01 D1`.
-2. **Use Waveshare's init table, not a generic one.** It begins with
-   `0xFE,0x20 / 0x19,0x10 / 0x1C,0xA0` (page select and panel tuning) before
-   the standard `0xC4 0x80`, `0x3A 0x55`, `0x35 0x00`, `0x53 0x20`,
-   `0x51 0xFF`, `0x63 0xFF`, `0x2A/0x2B` windows, `0x11`, `0x29`. A generic
-   CO5300 sequence can come up blank on this glass.
+   window is `0x2A = 00 06 01 D7`, `0x2B = 00 00 01 D1`. **Measured:** both
+   are needed and they agree — a full-width draw lands at columns 6..471 with
+   no strip at the left edge and no torn column at the right.
+2. **Use Waveshare's init table, not a generic one.** The table in
+   `src/hal/co5300_init.c` is theirs: sleep out, `0xFE 0x00` page select,
+   `0xC4 0x80` QSPI, `0x3A 0x55`, `0x53 0x20`, `0x63 0xFF`, `0x51`,
+   `0x58 0x00`, `0x35 0x00` (TEON), the two windows, `0x29`. The research note
+   originally listed a longer table with `0xFE 0x20 / 0x19 0x10 / 0x1C 0xA0`
+   page-tuning writes; the vendor driver this board ships with does not send
+   them, and the panel comes up correctly without. Do not invent a longer
+   sequence.
 3. **Brightness is `0x51`, 0-255.** Upstream `esp_lcd_co5300` exposes
    `esp_lcd_panel_co5300_set_brightness(panel, percent)`. This replaces the
    LEDC backlight in `display.cpp` and `applyDimmer()`. The 8-bit emission
    register is not the same perceptual scale as the current 10-bit LEDC duty,
-   so the night curve (`5 + 60 * 58s/100` percent, 85% day) must be
-   re-measured, not assumed.
+   so the night curve (`5 + 60 * 58s/100` percent, 85% day) is a **starting
+   point measured on the bench, not a port**; it has not been checked against
+   a dash dimmer in the car.
 4. **No backlight gate.** "Hold the backlight at 0 until the first frame" maps
-   to "set brightness 0, then the day level after the first flush".
+   to "set brightness 0, then the day level after the first flush". This works:
+   the boot log shows no init noise on the glass.
 5. **TE is available** at GPIO13 and enabled by `0x35,0x00` in the vendor
-   init. The existing `onRenderReady`/`teIsPulsing` logic ports with a new
-   pin, and the G-meter needs it.
+   init. **Measured:** `[lcd] TE sync on (4 edges, high 916 low 20604, rising
+   edge)` — the pulse is short-high, so the flush waits for the rising edge.
 6. **Even-pixel rounding.** Waveshare's BSP snaps invalidated areas to even
-   x/y edges. Add an `LV_EVENT_INVALIDATE_AREA` rounder and expect the flush
-   area to grow by up to one pixel/row.
-7. **Byte order is unverified for this panel.** The current flush callback
-   byte-swaps every RGB565 word for the ST77916. Waveshare's CO5300 path does
-   **not** swap, and the IDF driver ignores `data_endian`. The first glass
-   test must be a colour bar; wrong order shows as swapped or scrambled
-   colour. Do not copy the swap loop blindly.
+   x/y edges. `display.cpp` has an `LV_EVENT_INVALIDATE_AREA` rounder that
+   also clamps to 465, because the panel is 466 wide and an even-snapped edge
+   can overshoot by one.
+7. **Byte order: the swap IS needed.** This note originally said the CO5300
+   path does not swap and warned against copying the loop. That was wrong, and
+   the glass said so in the first build: white text drew **light green**, the
+   green arc **dark green**, and the near-black arc track **pink**. Waveshare's
+   own QSPI bus (`Arduino_ESP32QSPI::writePixels` → `MSB_32_16_16_SET`)
+   byte-swaps every 16-bit word on the way out. `flushCb` swaps. A capture
+   cannot catch this class of bug.
 8. **Rotation is flips only** in the Arduino-style CO5300 class; the IDF BSP
    uses MADCTL `MV` for 90/270. Irrelevant for a fixed-orientation gauge, but
    do not plan on rotating.
-9. **Driver source.** Arduino-ESP32 does not ship CO5300. Vendor
-   `espressif/esp-lcd-co5300` (Apache-2.0, `espressif/esp-iot-solution`) into
-   `src/hal/` the way `esp_lcd_st77916.c` is vendored today, and confirm the
-   Arduino core's IDF version meets the driver's requirement (>= 5.4; the
-   2026 2.x driver wants the newer `esp_lcd_panel_disp_sleep` API).
+9. **Driver source.** Arduino-ESP32 does not ship CO5300. `src/hal/`
+   `esp_lcd_co5300.c` is a trimmed copy of `espressif/esp-iot-solution`'s SPI
+   driver (Apache-2.0): create/init/draw/gap/invert/brightness, with the
+   sleep and deep-standby state machine removed because the gauge never
+   sleeps the panel.
 
 ## QSPI bandwidth
 
@@ -109,31 +131,30 @@ currently runs at **80 MHz**. Payload sizes and transfer time at 4-bit QSPI:
 | G-meter canvas | 216 KB, ~5.4 ms | ~363 KB, ~9.1 ms | ~363 KB, ~18.2 ms |
 
 The G-meter invalidates its whole canvas every 50 ms tail step, so at 40 MHz
-that one object would occupy roughly a third of the bus. Try 80 MHz early
-with a solid-colour plus moving-blob soak and keep 40 MHz as the fallback.
-If 40 MHz is the ceiling, shrink the canvas or invalidate only the dirty
-bounding box instead of the whole canvas.
+that one object would occupy roughly a third of the bus. **Decision on the
+bench: 80 MHz**, which works — a full frame is ~10.9 ms of bus and the panel
+comes up and runs stably, with the splash, all seven schemes and the moving
+G-meter exercised. 40 MHz remains the fallback if a longer soak shows trouble.
 
 ## Layout: 360 -> 466
 
-Everything is absolute pixels for 360x360, so the scale factor is
-466/360 = **1.294**.
+Everything was absolute pixels for 360x360, so the scale factor is
+466/360 = **1.294**. What was actually done:
 
 | File | Change |
 |---|---|
-| `include/board_config.h` | new pin map, `LCD_H_RES/V_RES = 466` |
-| `src/ui/gauge_ui.cpp` | `kArcSize 360→466`, stroke 21→27, tick radius, value row `300x96 @ 30,88`, rule `130x1 @ 115,216`, all align offsets |
-| `src/ui/gmeter_ui.cpp` | screen 360→466, canvas `360x300 @ y=60` → `466x390 @ y=60`, base 180→233, travel 72→93, blob 50→65 |
-| `src/hal/display.cpp` | draw buffer 360x60 → 466x60 = **55,920 B**; use 466x48 (44.7 KB) to hold the current RAM budget |
-| `src/ui/font_num_72.c` | regenerate as a ~93 px subset (digits, `.`, `-` only) |
-| `include/theme.h`, `include/lv_conf.h` | label faces 20/24/40 → 26/31/52; enable the new stock sizes |
-| `src/ui/splash.cpp`, `splash_img.cpp` | root 360x360 → 466x466; new `assets/*-466-base.jpg`; decode buffer 434 KB PSRAM (~150 ms vs 94 ms) |
-| `tools/capture_frame.py`, `GAUGE_CAPTURE` | reads/writes 360x360; needs the new geometry |
+| `include/board_config.h` | new pin map, `LCD_H_RES/V_RES = 466`, gap 6, brightness percentages |
+| `src/ui/gauge_ui.cpp` | `kArcSize` 360→466, stroke 21→27, tick radius 188, value row `388x124 @ 39,114`, rule `168x2 @ 149,280`, IAT at 313 |
+| `src/ui/gmeter_ui.cpp` | canvas `360x300 @ y=60` → `466x388 @ y=78`, base 180→233, travel 72→93, blob 50→65, tail 24→31 px |
+| `src/hal/display.cpp` | draw buffer 466x48 = **44,736 B** |
+| `src/ui/font_num_96.c` | the dash's 96 px face, regenerated with `.` as well as digits and `-` |
+| `include/theme.h`, `include/lv_conf.h` | label faces 20/26/30/48; the 12/14/18/22/24/40 stock faces are dropped |
+| `src/ui/splash.cpp`, `splash_img.cpp` | root 466x466; `assets/canvas-gauge-splash-466-base.jpg` (lanczos upscale of the 360 art); decode buffer 434,312 B PSRAM, **147 ms measured** |
+| `tools/capture_frame.py`, `GAUGE_CAPTURE` | 466x466, seven schemes |
 
-Budgets that move: static RAM +12.7 KB at 466x60 (from 116,632 B, 35.6%),
-G-meter canvas 216 KB → ~363 KB PSRAM, splash buffer 259 KB → 434 KB PSRAM.
-Flash grows by roughly 60 KB (driver, larger fonts, larger JPEG) against a
-6.25 MB OTA slot, so it is not a risk.
+Budgets as built: static RAM 118,464 B (36.2%), flash 1,422,967 B (21.7% of a
+6.25 MB OTA slot), G-meter canvas 361,616 B PSRAM, splash buffer 434,312 B
+PSRAM while it is up.
 
 ## Pin map (new board)
 
@@ -198,55 +219,57 @@ the AXP2101 DCDC1 *output*; power the board through **VBUS + GND**.
 - **Upside:** true black and fast pixel response suit both the night gauge
   and the moving G-meter dot.
 
-## G-meter axes must be re-derived
+## G-meter axes
 
-The QMI8658 is the same part at the same address, so `imu.cpp` needs only the
-I2C pins. But the chip sits differently on this PCB, so the defaults recorded
-for the 1.85 ("upright uses Z, flat uses Y, +Z away from the glass") do not
-carry over. Re-run the `tools/gmeter_test.cpp` cases unchanged, then re-derive
-the upright/flat axis and sign on the board and update the documented default
-and the mount setting. Flip accel/brake still covers a 180 degree mount.
+The QMI8658 is the same part at the same address, so `imu.cpp` needed only the
+I2C pins. The chip sits differently on this PCB, so the defaults recorded for
+the 1.85 ("upright uses Z, flat uses Y, +Z away from the glass") do not
+automatically carry over. The defaults were kept as-is and
+`tools/gmeter_test.cpp` still passes; the at-rest zero reads `avg=0.00` on the
+desk. **The upright/flat axis and sign have not been re-derived on this PCB**:
+that needs a real acceleration and a braking pull in the car. Flip accel/brake
+covers a 180 degree mount, and Mount Auto resolves upright/flat from gravity.
 
 ## Touch (enabled)
 
 CST9217 at `0x5A` on the shared I2C bus, INT GPIO11, RST GPIO40. Waveshare's
-BSP sets `swap_xy=0, mirror_x=1, mirror_y=1` and uses the interrupt, with the
-controller's `x_max/y_max` at 466. Enable it as an LVGL pointer input.
+BSP sets `swap_xy=0, mirror_x=1, mirror_y=1`; this firmware uses the same
+flags and **polls** instead of using the interrupt, because SensorLib notes
+the CST9217 raises INT about once a second rather than per touch.
 
-Open before implementation:
+Decided and built:
 
-- What a tap does. The gauge currently has BOOT short (accent) and long
-  (screen); touch must not duplicate or fight those, and an accidental tap
-  must not change a stored setting.
-- Whether taps are consumed only on the gauge screen, and whether a tap wakes
-  a dimmed screen.
-- `TP_RST` (GPIO40) must be driven deliberately at boot; it was the QSPI clock
-  on the old board.
-- The touch controller, PMIC, RTC and both audio codecs now share the IMU's
-  I2C bus at 400 kHz. Initialise the bus once.
+- **A tap steps the colour scheme.** That is the same action as a BOOT short
+  press, which is deliberate: the glass is the natural place to press it, and
+  the two paths end in one function.
+- **A horizontal swipe slides to the other screen**, with a 280 ms push
+  animation. Vertical movement is ignored so a sloppy tap is not a swipe.
+- Gestures are refused while the splash owns the glass and while a transition
+  is in flight.
+- `TP_RST` (GPIO40) is driven deliberately at boot; it was the QSPI clock on
+  the old board.
+- The touch controller, PMIC, RTC and both audio codecs share the IMU's I2C
+  bus at 400 kHz. `display::begin()` initialises it once.
 
-## Suggested port order
+Still open: whether a tap should wake a dimmed screen, and how the round glass
+edge should reject touches outside the visible circle.
 
-Each step is verifiable on its own; stop and report at each one.
+## What the port actually touched
 
-1. `board_config.h` + `display.cpp`: CO5300 bring-up, gap 6, 40/80 MHz sweep,
-   colour bar, orientation, byte order, TE probe, brightness API. Keep the
-   gauge UI out of the build until the glass is right.
-2. `tca9554` config or removal, `Wire` pins, IMU probe at `0x6B`,
-   `/api/status` `g100` at rest.
-3. Relayout: geometry constants, 93 px font, 466 splash, capture tool; then
-   capture all six schemes plus G-meter and splash and inspect the images.
-4. Touch: bring-up, LVGL indev, tap behaviour, `TP_RST` handling.
-5. G-meter axes/mount/flip for the new PCB.
-6. Update `README.md`, `docs/status.md`, `TODO.md`, `AGENTS.md` board facts
-   and the budget table (draw buffer, canvas, QSPI clock, panel ID).
+1. `board_config.h` + `display.cpp` + the vendored CO5300 driver: bring-up,
+   gap 6, 80 MHz, byte order, TE probe, brightness API.
+2. `tca9554` deleted; `Wire` moved to 15/14; IMU probed at `0x6B` first.
+3. Relayout: geometry constants, 96 px font, 466 splash, capture tool; seven
+   schemes plus G-meter and splash captured and inspected.
+4. Touch: bring-up, LVGL pointer indev, tap and swipe, `TP_RST` handling.
+5. Seven schemes copied from `OpenHaldex-S3-Dash`, with an NVS migration.
+6. `README.md`, `docs/status.md`, `TODO.md`, `AGENTS.md` board facts and the
+   budget table.
 
 ## Checks that cannot be skipped on hardware
 
-- Panel init leaves a blank/white screen unless the vendor `0xFE` page
-  commands are sent.
-- Colour byte order (colour bar, then a scheme capture).
-- 80 MHz QSPI stability under a moving G-meter.
+- Colour byte order. **This is the one that bit**: a capture is LVGL's
+  framebuffer, so only the glass can show a swapped panel.
 - `[lcd] TE sync on` with a plausible edge count on GPIO13.
 - Brightness at 5% and 85%, and the 58s night curve in the car.
 - Touch coordinates against the four screen edges and the round mask.

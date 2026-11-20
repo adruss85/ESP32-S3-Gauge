@@ -2,8 +2,8 @@
 
 A standalone **digital boost gauge** for the
 **[OpenHaldex](https://github.com/Forbes-Automotive/OpenHaldex-C6)** Haldex
-controller, running on a **Waveshare ESP32-S3-LCD-1.85** (360x360 round IPS
-panel, ST77916 over QSPI).
+controller, running on a **Waveshare ESP32-S3-Touch-AMOLED-1.75** (466x466
+round AMOLED, CO5300 over QSPI, CST9217 touch).
 
 The gauge is **receive-only** with respect to the car: it listens for the
 controller's `OHX_STATUS` ESP-NOW broadcast for boost (and rpm/speed/throttle/
@@ -20,7 +20,7 @@ does not touch the car's network.
 > This repository is AI-generated and human-tested on one board. It is not
 > security-audited. Read the code before you flash it.
 
-![The gauge in the green scheme](assets/gauge-preview.png)
+![The gauge in the Midnight scheme](assets/gauge-preview.png)
 
 ## What it shows
 
@@ -28,73 +28,81 @@ does not touch the car's network.
   consistent accent colour across the whole sweep (no warning colours). The
   default scale is `0 / 5 / 10 / 15 / 20 / 25` PSI; both ends are editable
   from the web page (0.1 PSI steps, minimum may be negative for vacuum).
-- Large 72 px white boost value with the decimal point on the text baseline.
+- Large 96 px boost value with the decimal point on the text baseline.
 - `BOOST PSI` caption, and the intake air temperature under a thin rule.
 - Automatic day/night dimming from the car's Terminal 58s dash-dimmer
   reading (`Cluster_2`, `0x420`) in the CANN relay, using the same curve as
   `OpenHaldex-S3-Dash`. Terminal 58d is not used: it reads non-zero with the
-  lights off. Without a 58s reading the backlight stays at the day level.
-- Six accent schemes: **green, orange, red, blue, white, purple**. A **short
-  press** of the board's **BOOT** key (GPIO0) steps through them; a **700 ms
-  hold** switches to the G-meter and back. The key is polled with a 30 ms
-  debounce, so a deliberate tap lands even while the arc is repainting. With
-  the CANN relay on, **Cancel + Down** together on the PQ cruise stalk cycles
-  the accent, and a **long press of Down alone** switches screens
-  (`[ui] cruise mode`); each accent source logs `[ui] accent <name>` (the
-  stalk adds `[ui] cruise combo`). The scheme is stored in NVS and survives a
-  power cycle.
-- A **G-meter screen**: a 50 px accent-coloured blob moves vertically for
+  lights off. Without a 58s reading the emission stays at the day level.
+- **Seven colour schemes**, copied from `OpenHaldex-S3-Dash` so the gauge and
+  the dashboard on the same car read the same: **Midnight, Orange, Green,
+  Blue, Purple, White, Red**. Midnight is the default. A **tap** on the glass
+  steps to the next one, as does a **short press** of the board's **BOOT** key
+  (GPIO0); a **700 ms hold** switches to the G-meter and back. The key is
+  polled with a 30 ms debounce, so a deliberate tap lands even while the arc
+  is repainting. With the CANN relay on, **Cancel + Down** together on the PQ
+  cruise stalk cycles the accent, and a **long press of Down alone** switches
+  screens (`[ui] cruise mode`); each accent source logs `[ui] accent <name>`
+  (the stalk adds `[ui] cruise combo`). The scheme is stored in NVS and
+  survives a power cycle.
+- A **horizontal swipe** slides to the other screen. The swipe animates with a
+  280 ms cubic ease-out push, because that is the motion the finger just made;
+  BOOT, the stalk and the web page keep the 260 ms cross-fade.
+- A **G-meter screen**: a 65 px accent-coloured blob moves vertically for
   acceleration/braking and horizontally for lateral acceleration; a fading
   tail covers the last second. The white `0.00 g` readout at the bottom is
   the 1 s average of the two-axis magnitude. See
   [G-meter mode](#g-meter-mode).
-- A **20x4 px link line** at the bottom edge: green when `OHX_STATUS` is
+- A **26x5 px link line** at the bottom edge: green when `OHX_STATUS` is
   fresh, orange when it is stale, amber when only CANN is arriving, red when
   nothing has been heard.
 - Unknown values draw `--`, never a fake zero. A genuine `0` draws `0`.
 
-![All six accent schemes](assets/gauge-schemes.png)
+![All seven colour schemes](assets/gauge-schemes.png)
 
 ## Hardware
 
 | Piece | Notes |
 |---|---|
-| Display board | Waveshare ESP32-S3-LCD-1.85, ESP32-S3R8, 16 MB flash, 8 MB OPI PSRAM |
-| Panel | 360x360 ST77916, QSPI, vendor init sequence when ID reads `00 02 7F 7F` |
-| LCD reset | TCA9554 I/O expander at `0x20`, bit 1 (I2C SDA 11 / SCL 10) |
+| Display board | Waveshare ESP32-S3-Touch-AMOLED-1.75, ESP32-S3R8, 16 MB flash, 8 MB OPI PSRAM |
+| Panel | 466x466 CO5300 AMOLED, QSPI, visible area starts at controller column 6 |
+| Panel reset | GPIO39 |
+| Brightness | emission register `0x51` (an AMOLED has no backlight) |
+| Touch | CST9217 at I2C `0x5A`, reset GPIO40, interrupt GPIO11 (not used: polled) |
 | IMU | QMI8658 6-axis at I2C `0x6B` on the same bus, ±4 g / 250 Hz |
-| Backlight | GPIO5, LEDC PWM |
 | BOOT key | GPIO0, active low, internal pull-up |
 | Power button | battery latch, not a GPIO input (see below) |
 | Bench listener | Plain ESP32-WROOM devkit (`env:esp32dev`) |
 
-Touch on this board is wired on a separate bus (GPIO1/3) and is not used.
+The TCA9554 expander, AXP2101 PMIC and PCF85063 RTC share that I2C bus
+(SDA 15 / SCL 14). The expander is left at its power-on default — every pin an
+input — because all of its pins belong to other chips; nothing here drives it.
 
-### Board status
+### Board history
 
-This unit's panel has failed. The firmware is being moved to a Waveshare
-**ESP32-S3-Touch-AMOLED-1.75** (466x466 CO5300 AMOLED, AXP2101 PMIC, CST9217
-touch), and **touch will be enabled** on it. That work is **researched only**:
-no code has changed and the firmware still targets the 1.85. The port note —
-pin map, CO5300 quirks, 360→466 relayout, touch and power — is
-[`docs/board-port-amoled-175.md`](docs/board-port-amoled-175.md). Nothing in
-the table above describes the new board.
+The firmware was developed on a **Waveshare ESP32-S3-LCD-1.85** (360x360
+ST77916). That unit's panel failed, and 0.6.0 moved the build to the AMOLED
+board. The 1.85 pin map, the TCA9554 LCD reset and the 72 px value face are
+in git history, not in this tree. What the move involved, and which
+assumptions had to be corrected on the bench, is recorded in
+[`docs/board-port-amoled-175.md`](docs/board-port-amoled-175.md).
 
 ## G-meter mode
 
 The QMI8658 is on the control I2C bus, so the G-meter is entirely local. The
-screen is a 50 px blob in the active accent colour, centred at 0 g. Its
+screen is a 65 px blob in the active accent colour, centred at 0 g. Its
 vertical position is acceleration/braking; its horizontal position is lateral
-acceleration. A 20-dot tail fades over the last second; the white number at the
+acceleration. A 20-dot tail fades over the last second; the readout at the
 bottom is the 1 s mean of `sqrt(longitudinal² + lateral²)`.
 
 Switch screens from the web page, the console `m` key, a **700 ms BOOT
-hold**, or a **long Down press on the PQ cruise stalk** (CANN relay on). The
-mode is stored in NVS. The board's power button is a battery
-latch, not a GPIO input, so BOOT is the only physical key; a short press still
-steps the accent scheme. The change is a 260 ms cross-fade. Each object fades
-its own opacity because a full-screen LVGL opacity layer would need 259 KB
-and the pool is 128 KB.
+hold**, a **horizontal swipe**, or a **long Down press on the PQ cruise stalk**
+(CANN relay on). The mode is stored in NVS. The board's power button is a
+battery latch, not a GPIO input, so BOOT is the only physical key; a short
+press still steps the colour scheme. A key or web change is a 260 ms
+cross-fade, a swipe is a 280 ms slide. Each object fades its own opacity
+because a full-screen LVGL opacity layer would need 434 KB and the pool is
+128 KB.
 
 The math follows the usual accelerometer G-meter practice:
 
@@ -133,23 +141,24 @@ acceleration and down under braking; if it is reversed, tick Flip. Accuracy in
 a car has not been verified yet (see [`docs/status.md`](docs/status.md)).
 
 The panel's **TE output** is used for the moving dot: `display.cpp` waits
-for the ST77916 V-blank edge before flushing a render, so the dot is not
+for the CO5300 V-blank edge before flushing a render, so the dot is not
 written while the panel scans the same rows. The boot log states whether
 the signal was found (`[lcd] TE sync on ...`); if it says `TE not pulsing`,
 the flush falls back to unsynced. The panel IO queue holds 64 transfers,
-and the G-meter draws its dot, tail and readout into one 360x300 canvas, so
+and the G-meter draws its dot, tail and readout into one 466x388 canvas, so
 only one object is invalidated instead of a blob, 20 tail dots and a label.
 The display uses one partial draw buffer and serialises the flushes.
 
 ## Boot screen
 
-Every boot shows [`assets/canvas-gauge-splash-360-base.jpg`](assets/canvas-gauge-splash-360-base.jpg)
+Every boot shows [`assets/canvas-gauge-splash-466-base.jpg`](assets/canvas-gauge-splash-466-base.jpg)
 for three seconds. The JPEG is linked into flash and decoded by the S3 mask
-ROM's TJpgDec into a temporary 259,200 B PSRAM buffer (94 ms measured); the
+ROM's TJpgDec into a temporary 434,312 B PSRAM buffer (147 ms measured); the
 buffer is freed when the splash is deleted, not hidden. A green `lv_bar`
-sits on the artwork's red rule (200x3 at x=80, y=202) and fills from 0 to
-100% over 3 s; the running version is bottom right. The panel stays dark
-until the first splash frame is queued, so boot noise is not shown.
+sits on the artwork's rule (258x4 at x=104, y=262) and fills from 0 to
+100% over 3 s; the running version is bottom right. The panel's emission is
+held at zero until the first splash frame is queued, so boot noise is not
+shown.
 
 The splash can be photographed with `-DGAUGE_CAPTURE_SPLASH=1`; see
 [Capturing the glass](#capturing-the-glass).
@@ -182,31 +191,33 @@ Console keys while it is running:
 
 - `i` — raw/packet/frame/reject counters and the current channel
 - `s` or `r` — force a channel scan
-- `b` — step the accent scheme (same action as a short BOOT press)
+- `b` — step the colour scheme (same action as a short BOOT press)
 - `m` — boost gauge <-> G-meter (same action as a 700 ms BOOT hold)
 - `z` — zero the G-meter (car stationary)
 - `g` — print the current G reading once
+- `t` — toggle a 5 Hz log of the mapped touch point, for checking the mirror
+  and axis flags in `board_config.h`
 - `a` — toggle a 2 Hz raw accelerometer/gyro dump, for checking the mount axes
 
 A healthy link looks like:
 
 ```text
-ESP32-S3-Gauge 0.5.2
+ESP32-S3-Gauge 0.6.0
 [gauge] boost from OHX_STATUS, IAT from Engine_3 (0x380)
 [set] scheme 0, scale 0.0..25.0 PSI
 [set] mode gauge, mount upright, flip 0
-[lcd] panel id: 00 02 7F 7F
-[lcd] using vendor init sequence
-[lcd] TE sync on (4 edges, high 1029 low 20495, rising edge)
-[lcd] Waveshare ESP32-S3-LCD-1.85 ready (360x360)
-[tca9554] ready at 0x20
+[lcd] bringing up the 1.75" CO5300 AMOLED
+[lcd] CO5300 init (466x466, gap 6, 80 MHz QSPI)
+[lcd] TE sync on (4 edges, high 916 low 20604, rising edge)
+[lcd] Waveshare ESP32-S3-Touch-AMOLED-1.75 ready (466x466)
 [imu] QMI8658 at 0x6B, accel +/-4 g 250 Hz, gyro 256 dps
+[touch] CST9217 at 0x5A, 466x466, tap = scheme, swipe = screen
 [ui] mode gauge, mount upright, flip 0
-[splash] picture 360x360 in 94 ms (19112 B flash, 259200 B PSRAM)
+[splash] picture 466x466 in 147 ms (14414 B flash, 434312 B PSRAM)
 [ui] splash up (3 s)
-[ui] accent green (short press cycles, long press = G-meter)
+[ui] accent Midnight (BOOT: short = scheme, long = screen; touch: tap = scheme, swipe = screen)
 [ui] splash down
-[now] scan: 7 APs; anchor "OpenHaldex-C6" ch 1 (-74 dBm)
+[now] scan: 7 APs; anchor "CANv-dash" ch 2 (-48 dBm)
 [now] hop limit is now 1-11
 [web] AP "CANv-gauge" (open) channel 1, http://192.168.4.1/
 [now] setup AP up: holding channel 1 (scan-only discovery)
@@ -236,7 +247,7 @@ Join it from a phone or laptop. The page shows live boost, IAT, the G
 average and its two signed axes, channel, RSSI and packet rate. These controls
 persist in NVS:
 
-- **Colour scheme** — the same six as the BOOT key.
+- **Colour scheme** — the same seven as the BOOT key and a tap.
 - **Scale** — minimum and maximum in 0.1 PSI steps, limited to -15.0..50.0
   PSI with a span of 5..60 PSI. The arc re-labels and re-ranges immediately.
   The numeric readout still shows a value outside the scale; only the arc
@@ -286,7 +297,7 @@ The boot log states which mode is active:
 ## Capturing the glass
 
 Layout and colour changes can be checked without a camera. The capture build
-renders one frame per scheme and streams each 360x360 RGB565 framebuffer over
+renders one frame per scheme and streams each 466x466 RGB565 framebuffer over
 USB:
 
 ```bash
@@ -295,9 +306,10 @@ PLATFORMIO_BUILD_FLAGS="-DGAUGE_CAPTURE=1" \
 ./.venv/bin/python tools/capture_frame.py /dev/ttyACM0 /tmp/gauge
 ```
 
-This writes `gauge_<n>_<scheme>.ppm`. The capture code and its 512 KB LVGL
-pool are compiled out of normal firmware. To photograph another reading (for
-example a vacuum value with a negative minimum), override the fixed boost:
+This writes `gauge_<n>_<scheme>.ppm`, seven of them. The capture code and its
+1 MB LVGL pool are compiled out of normal firmware. To photograph another
+reading (for example a vacuum value with a negative minimum), override the
+fixed boost:
 
 ```bash
 PLATFORMIO_BUILD_FLAGS="-DGAUGE_CAPTURE=1 -DGAUGE_CAPTURE_BOOST=-2.5f" \
@@ -314,7 +326,7 @@ PLATFORMIO_BUILD_FLAGS="-DGAUGE_CAPTURE=1 -DGAUGE_CAPTURE_GMETER=1" \
 ./.venv/bin/python tools/capture_frame.py /dev/ttyACM0 /tmp/gmeter
 ```
 
-That writes six frames named by accent, exactly like the gauge sweep.
+That writes one frame named by scheme, exactly like the gauge sweep.
 
 `-DGAUGE_CAPTURE_SPLASH=1` captures the boot screen instead, at two seconds
 with the loading rule part-filled:
@@ -345,9 +357,9 @@ the car.
 ```text
 include/     board pins, LVGL config, theme, version, shared wire headers
 src/app/     config, NVS settings (scheme/scale/mode/mount), G-meter math
-src/hal/     QSPI panel, TCA9554 reset, BOOT key, QMI8658 IMU
+src/hal/     CO5300 QSPI panel, CST9217 touch, BOOT key, QMI8658 IMU
 src/net/     ESP-NOW receive, channel discovery, IAT decode, setup AP + OTA
-src/ui/      gauge, G-meter, dashboard/fade, boot splash, accents
+src/ui/      gauge, G-meter, dashboard/fade+slide, boot splash, schemes
 tools/       serial monitor, framebuffer capture, host math/button checks
 assets/      splash art and documentation screenshots
 docs/        status and verification notes
@@ -362,7 +374,8 @@ TODO.md      open hardware and firmware items
 - [`TODO.md`](TODO.md) — open items, including the first in-car G-meter test
   and the physical BOOT long-press check.
 - [`docs/board-port-amoled-175.md`](docs/board-port-amoled-175.md) — the
-  researched (unimplemented) move to the ESP32-S3-Touch-AMOLED-1.75.
+  AMOLED move: pin map, the assumptions that had to be corrected, and what
+  still needs a human.
 - [`AGENTS.md`](AGENTS.md) — conventions, hard rules and where to change what.
 
 ## Credits
@@ -372,8 +385,12 @@ The controller, its CAN decoding and the ESP-NOW protocol are the work of
 `include/ohx_proto.h` and `include/cannow_proto.h` are verbatim copies of the
 shared wire-format headers; refresh them from upstream, never hand-edit them.
 
-The 72 px Montserrat Bold subset is generated from the face used by
-[`OpenHaldex-S3-Dash`](https://github.com/adruss85/OpenHaldex-S3-Dash).
+The 96 px Montserrat Bold subset is generated from the face used by
+[`OpenHaldex-S3-Dash`](https://github.com/adruss85/OpenHaldex-S3-Dash), and
+the seven colour schemes are copied from that dashboard's palette table.
+The CO5300 panel driver is trimmed from Espressif's
+[`esp-iot-solution`](https://github.com/espressif/esp-iot-solution) driver,
+with Waveshare's own register sequence for this glass.
 
 ## Licence
 

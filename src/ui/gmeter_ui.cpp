@@ -27,14 +27,14 @@
 namespace gmeter_ui {
 namespace {
 
-constexpr int kScreen = 360;
-constexpr int kCanvasTop = 60;
-constexpr int kCanvasH = 300;
-constexpr int kBlobSize = 50;
+constexpr int kScreen = 466;
+constexpr int kCanvasTop = 78;
+constexpr int kCanvasH = 388;
+constexpr int kBlobSize = 65;
 constexpr int kBlobHalf = kBlobSize / 2;
-constexpr int kBaseX = 180;
-constexpr int kBaseY = 180;
-constexpr int kTravelPx = 72;
+constexpr int kBaseX = 233;
+constexpr int kBaseY = 233;
+constexpr int kTravelPx = 93;
 constexpr float kFullScaleG = 1.2f;
 constexpr size_t kTailCount = 20;
 constexpr uint32_t kTailStepMs = 50;
@@ -59,10 +59,11 @@ int16_t g_histX[kTailCount] = {};
 int16_t g_histY[kTailCount] = {};
 uint32_t g_lastStepMs = 0;
 char g_lastText[12] = "";
+int g_slideX = 0;
 
 int tailSize(size_t i) {
-  // 24 px at the newest end down to 6 px at the oldest.
-  return 24 - (int)((18 * i) / (kTailCount - 1));
+  // 31 px at the newest end down to 8 px at the oldest.
+  return 31 - (int)((23 * i) / (kTailCount - 1));
 }
 
 void drawCanvas(int x, int y, bool valid, bool tail, const char *text) {
@@ -101,13 +102,13 @@ void drawCanvas(int x, int y, bool valid, bool tail, const char *text) {
   }
 
   const int lineH = lv_font_get_line_height(FONT_G);
-  const int bottom = kCanvasH - 12;
+  const int bottom = kCanvasH - 16;
   lv_area_t textArea = {0, bottom - lineH, kScreen - 1, bottom};
   lv_draw_label_dsc_t ld;
   lv_draw_label_dsc_init(&ld);
   ld.text = text;
   ld.font = FONT_G;
-  ld.color = COL_FG;
+  ld.color = theme::fg();
   ld.opa = LV_OPA_COVER;
   ld.align = LV_TEXT_ALIGN_CENTER;
   lv_draw_label(&layer, &ld, &textArea);
@@ -167,6 +168,14 @@ void applyScheme() {
   drawCanvas(g_lastX, g_lastY, g_lastValid, g_tailVisible, text);
 }
 
+void setSlide(int dx) {
+  if (g_canvas == nullptr || dx == g_slideX) return;
+  g_slideX = dx;
+  lv_obj_set_pos(g_canvas, dx, kCanvasTop);
+}
+
+int slide() { return g_slideX; }
+
 void update(const gmeter::Reading &r) {
   if (g_canvas == nullptr) return;
 
@@ -194,7 +203,10 @@ void update(const gmeter::Reading &r) {
 
   int y = kBaseY - (int)lroundf(v * (float)kTravelPx / kFullScaleG);
   int x = kBaseX + (int)lroundf(l * (float)kTravelPx / kFullScaleG);
-  if (y < kBlobHalf) y = kBlobHalf;
+  // The blob must stay inside the canvas, not just inside the glass: the
+  // canvas starts at kCanvasTop, so anything above it would be drawn at a
+  // negative layer coordinate and clipped away.
+  if (y < kCanvasTop + kBlobHalf) y = kCanvasTop + kBlobHalf;
   if (y > kScreen - kBlobHalf) y = kScreen - kBlobHalf;
   if (x < kBlobHalf) x = kBlobHalf;
   if (x > kScreen - kBlobHalf) x = kScreen - kBlobHalf;

@@ -19,6 +19,8 @@ namespace gmeter_ui {
 void create();
 
 void setVisible(bool visible);
+void setSlide(int dx);
+int slide();
 
 // 0..255. Scales the blob, tail and readout together for the mode fade.
 void setOpacity(uint8_t opacity);

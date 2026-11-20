@@ -20,13 +20,25 @@ enum class Mode : uint8_t {
   GMeter = 1,
 };
 
+// Which transition draws a mode change. A key or web change cross-fades; a
+// swipe slides, because that is the motion the finger just made.
+enum class Anim : uint8_t {
+  Fade = 0,
+  Slide = 1,
+};
+
 void begin();
 
 Mode mode();
 
-// source is only for the console line: "web", "BOOT key" or "stored".
-void setMode(Mode m, bool persist = true, const char *source = "BOOT key");
+// source is only for the console line: "web", "BOOT key", "swipe" or
+// "stored".
+void setMode(Mode m, bool persist = true, const char *source = "BOOT key",
+             Anim anim = Anim::Fade);
 void toggleMode(const char *source = "BOOT key");
+
+// True while a fade or slide is in flight; gestures are ignored then.
+bool moving();
 
 void nextScheme();
 void setScheme(theme::Scheme s, bool persist = true);

@@ -1,23 +1,22 @@
 // =====================================================================
 // gauge_ui.cpp - the digital boost gauge
 //
-// Reference layout: a 270 degree arc with six scale labels, a large white
-// boost value with a decimal point on the baseline, a BOOST PSI caption in
-// the active accent, and the intake-air temperature under a thin rule.
+// Reference layout: a 270 degree arc with six scale labels, a large value
+// with a decimal point on the baseline, a BOOST PSI caption in the active
+// accent, and the intake-air temperature under a thin rule.
 //
 // The scale is a setting, not a constant: the web page can move the minimum
 // and maximum (in 0.1 PSI steps) and the arc and its six labels follow. A
 // minimum below zero is allowed because the controller reports vacuum as a
-// negative mbar value; the 72 px face includes '-', so a minus is drawn as
+// negative mbar value; the 96 px face includes '-', so a minus is drawn as
 // part of the whole-number label.
 //
 // The value is built from three flex items (integer, dot, fraction) so it
 // stays centred at every width. The dot is a real '.' glyph from the same
 // font, not a circle, so it sits on the text baseline.
 //
-// The arc keeps one colour across the whole sweep; the BOOT key, the cruise
-// stalk or the web page changes that accent (green/orange/red/blue/white/
-// purple).
+// Geometry is absolute pixels for the 466x466 AMOLED. Every constant below
+// is the 1.85 build's 360 px value times 466/360 = 1.294, rounded.
 // =====================================================================
 #include "ui/gauge_ui.h"
 
@@ -45,11 +44,11 @@ int32_t g_lastDrawn = INT32_MIN;
 // the arc against the new range even if the reading has not moved.
 bool g_scaleDirty = true;
 
-// Outer radius 180 px fills the round glass; the 21 px stroke sits inside
-// the edge. The scale labels sit 14 px inside the inner edge (radius 145).
-constexpr int kArcSize = 360;
-constexpr int kArcWidth = 21;
-constexpr int kTickRadius = kArcSize / 2 - kArcWidth - 14;
+// Outer radius 233 px fills the round glass; the 27 px stroke sits inside
+// the edge. The scale labels sit 18 px inside the inner edge (radius 188).
+constexpr int kArcSize = 466;
+constexpr int kArcWidth = 27;
+constexpr int kTickRadius = kArcSize / 2 - kArcWidth - 18;
 
 lv_obj_t *g_root = nullptr;
 lv_obj_t *g_arc = nullptr;
@@ -64,6 +63,7 @@ lv_obj_t *g_status = nullptr;
 lv_obj_t *g_ticks[6] = {};
 uint8_t g_masterOpa = 255;
 bool g_ready = false;
+int g_slideX = 0;
 
 struct Tick {
   int16_t angle;  // LVGL arc angle, 135 = scale minimum, 405 = maximum
@@ -71,15 +71,15 @@ struct Tick {
 
 constexpr size_t kTickCount = 6;
 
-// Even 54-degree steps from the 135-degree arc start. Radius 145 puts the
-// labels close to the edge arc but still inside its 159 px inner edge. The
+// Even 54-degree steps from the 135-degree arc start. Radius 188 puts the
+// labels close to the edge arc but still inside its 206 px inner edge. The
 // text is rebuilt by updateScaleVisuals() whenever the range changes.
 const Tick kTicks[kTickCount] = {
     {135}, {189}, {243}, {297}, {351}, {405},
 };
 
-// -2.5 -> "-2.5", -2.0 -> "-2", 12.5 -> "12.5". The 72 px face is only used
-// for the value row; the labels are Montserrat 16.
+// -2.5 -> "-2.5", -2.0 -> "-2", 12.5 -> "12.5". The 96 px face is only used
+// for the value row; the labels are Montserrat 20.
 void formatTenths(int16_t tenths, char *buf, size_t len) {
   const int a = abs((int)tenths);
   if (a % 10 == 0) {
@@ -113,23 +113,34 @@ void plain(lv_obj_t *obj) {
   lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE);
 }
 
+// A scheme change repaints the whole gauge: the arc, the value, the ticks
+// and the captions all take a role from the palette, and on the non-Midnight
+// schemes the text itself is the scheme's hue, not a shared white.
 void applyScheme() {
   if (!g_ready) return;
 
   const lv_color_t accent = theme::accent();
   lv_obj_set_style_arc_color(g_arc, accent, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(g_arc, theme::track(), LV_PART_MAIN);
   lv_obj_set_style_text_color(g_unit, accent, 0);
+  lv_obj_set_style_text_color(g_iatCap, theme::dim(), 0);
   for (lv_obj_t *tick : g_ticks) {
-    if (tick != nullptr) lv_obj_set_style_text_color(tick, accent, 0);
+    if (tick != nullptr) lv_obj_set_style_text_color(tick, theme::dim(), 0);
   }
-  lv_obj_set_style_text_color(g_iatCap, accent, 0);
+
+  const lv_color_t fg = theme::fg();
+  lv_obj_set_style_text_color(g_whole, fg, 0);
+  lv_obj_set_style_text_color(g_dot, fg, 0);
+  lv_obj_set_style_text_color(g_frac, fg, 0);
+  lv_obj_set_style_text_color(g_iat, fg, 0);
+  lv_obj_set_style_bg_color(g_rule, theme::line(), 0);
 }
 
-// The gauge is faded out while the G-meter fades in.  LVGL can only keep
-// per-object opacity cheap; a container opacity would allocate a 360x360
-// layer, which does not fit the 128 KB pool.  So every visible object gets
-// its own scale, and the two deliberately dim captions keep their 60%
-// base opacity.
+// The gauge is faded out while the G-meter fades in, and slid sideways during
+// a swipe.  LVGL can only keep per-object opacity cheap; a container opacity
+// would allocate a 466x466 layer (434 KB), which does not fit the 128 KB
+// pool.  So every visible object gets its own scale, and the two
+// deliberately dim captions keep their 60% base opacity.
 void applyOpacity() {
   if (!g_ready) return;
 
@@ -158,14 +169,14 @@ void addTicks(lv_obj_t *scr) {
     const int cy = kArcSize / 2 + (int)lroundf((float)kTickRadius * sinf(rad));
 
     lv_obj_t *box = lv_obj_create(scr);
-    lv_obj_set_size(box, 40, 22);
-    lv_obj_set_pos(box, cx - 20, cy - 11);
+    lv_obj_set_size(box, 52, 28);
+    lv_obj_set_pos(box, cx - 26, cy - 14);
     plain(box);
 
     lv_obj_t *label = lv_label_create(box);
     lv_label_set_text(label, "");
     lv_obj_set_style_text_font(label, FONT_SMALL, 0);
-    lv_obj_set_style_text_color(label, COL_DIM, 0);
+    lv_obj_set_style_text_color(label, theme::dim(), 0);
     lv_obj_set_style_text_opa(label, LV_OPA_60, 0);
     lv_obj_center(label);
 
@@ -176,8 +187,8 @@ void addTicks(lv_obj_t *scr) {
 
 void addValueRow(lv_obj_t *scr) {
   lv_obj_t *row = lv_obj_create(scr);
-  lv_obj_set_size(row, 300, 96);
-  lv_obj_set_pos(row, 30, 88);
+  lv_obj_set_size(row, 388, 124);
+  lv_obj_set_pos(row, 39, 114);
   plain(row);
 
   lv_obj_set_layout(row, LV_LAYOUT_FLEX);
@@ -189,19 +200,19 @@ void addValueRow(lv_obj_t *scr) {
   g_whole = lv_label_create(row);
   lv_label_set_text(g_whole, "--");
   lv_obj_set_style_text_font(g_whole, FONT_VALUE, 0);
-  lv_obj_set_style_text_color(g_whole, COL_FG, 0);
+  lv_obj_set_style_text_color(g_whole, theme::fg(), 0);
 
   // A real period glyph shares the digits' baseline, so it lands at the
   // bottom of the value instead of floating in the middle.
   g_dot = lv_label_create(row);
   lv_label_set_text(g_dot, ".");
   lv_obj_set_style_text_font(g_dot, FONT_VALUE, 0);
-  lv_obj_set_style_text_color(g_dot, COL_FG, 0);
+  lv_obj_set_style_text_color(g_dot, theme::fg(), 0);
 
   g_frac = lv_label_create(row);
   lv_label_set_text(g_frac, "0");
   lv_obj_set_style_text_font(g_frac, FONT_VALUE, 0);
-  lv_obj_set_style_text_color(g_frac, COL_FG, 0);
+  lv_obj_set_style_text_color(g_frac, theme::fg(), 0);
 }
 
 }  // namespace
@@ -213,8 +224,9 @@ void create() {
   lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
   // A full-screen transparent container owns every gauge object. The
-  // dashboard hides this one container when the G-meter is up, and fades
-  // its children individually during the transition.
+  // dashboard hides this one container when the G-meter is up, fades its
+  // children individually during the transition, and slides the container
+  // itself during a swipe.
   g_root = lv_obj_create(scr);
   lv_obj_set_size(g_root, kArcSize, kArcSize);
   lv_obj_set_pos(g_root, 0, 0);
@@ -239,7 +251,7 @@ void create() {
   lv_obj_set_style_pad_all(g_arc, 0, LV_PART_KNOB);
 
   lv_obj_set_style_arc_width(g_arc, kArcWidth, LV_PART_MAIN);
-  lv_obj_set_style_arc_color(g_arc, COL_TRACK, LV_PART_MAIN);
+  lv_obj_set_style_arc_color(g_arc, theme::track(), LV_PART_MAIN);
   lv_obj_set_style_arc_rounded(g_arc, true, LV_PART_MAIN);
 
   lv_obj_set_style_arc_width(g_arc, kArcWidth, LV_PART_INDICATOR);
@@ -253,13 +265,15 @@ void create() {
   lv_label_set_text(g_unit, "BOOST PSI");
   lv_obj_set_style_text_font(g_unit, FONT_LABEL, 0);
   lv_obj_set_style_text_color(g_unit, theme::accent(), 0);
-  lv_obj_set_style_text_letter_space(g_unit, 4, 0);
-  lv_obj_align(g_unit, LV_ALIGN_TOP_MID, 0, 190);
+  lv_obj_set_style_text_letter_space(g_unit, 5, 0);
+  lv_obj_align(g_unit, LV_ALIGN_TOP_MID, 0, 246);
 
+  // 2 px rather than 1: on an emissive panel at this density a single row of
+  // lit pixels reads as a faint seam, and the rule is meant to separate.
   g_rule = lv_obj_create(g_root);
-  lv_obj_set_size(g_rule, 130, 1);
-  lv_obj_set_pos(g_rule, 115, 216);
-  lv_obj_set_style_bg_color(g_rule, COL_LINE, 0);
+  lv_obj_set_size(g_rule, 168, 2);
+  lv_obj_set_pos(g_rule, 149, 280);
+  lv_obj_set_style_bg_color(g_rule, theme::line(), 0);
   lv_obj_set_style_bg_opa(g_rule, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(g_rule, 0, 0);
   lv_obj_remove_flag(g_rule, LV_OBJ_FLAG_SCROLLABLE);
@@ -267,26 +281,26 @@ void create() {
   g_iatCap = lv_label_create(g_root);
   lv_label_set_text(g_iatCap, "IAT");
   lv_obj_set_style_text_font(g_iatCap, FONT_SMALL, 0);
-  lv_obj_set_style_text_color(g_iatCap, theme::accent(), 0);
+  lv_obj_set_style_text_color(g_iatCap, theme::dim(), 0);
   lv_obj_set_style_text_opa(g_iatCap, LV_OPA_60, 0);
-  lv_obj_align(g_iatCap, LV_ALIGN_TOP_MID, 0, 220);
+  lv_obj_align(g_iatCap, LV_ALIGN_TOP_MID, 0, 285);
 
   g_iat = lv_label_create(g_root);
   lv_label_set_text(g_iat, "--");
   lv_obj_set_style_text_font(g_iat, FONT_IAT, 0);
-  lv_obj_set_style_text_color(g_iat, COL_FG, 0);
-  lv_obj_align(g_iat, LV_ALIGN_TOP_MID, 0, 242);
+  lv_obj_set_style_text_color(g_iat, theme::fg(), 0);
+  lv_obj_align(g_iat, LV_ALIGN_TOP_MID, 0, 313);
 
   // Link state as a small line at the bottom edge: a few pixels tall, wide
   // enough to read at a glance without becoming a lamp.
   g_status = lv_obj_create(g_root);
-  lv_obj_set_size(g_status, 20, 4);
-  lv_obj_set_style_radius(g_status, 2, 0);
+  lv_obj_set_size(g_status, 26, 5);
+  lv_obj_set_style_radius(g_status, 3, 0);
   lv_obj_set_style_bg_color(g_status, COL_STATUS_IDLE, 0);
   lv_obj_set_style_bg_opa(g_status, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(g_status, 0, 0);
   lv_obj_remove_flag(g_status, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_align(g_status, LV_ALIGN_BOTTOM_MID, 0, -18);
+  lv_obj_align(g_status, LV_ALIGN_BOTTOM_MID, 0, -23);
 
   g_ready = true;
   applyScheme();
@@ -309,8 +323,8 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   }
 
   // Only touch the widgets when the rounded value changes. The smoothing
-  // loop runs at 20 Hz, but repainting the 314 px arc on every iteration
-  // is what made the loop sluggish and the value look unsettled.
+  // loop runs at 20 Hz, but repainting the thick arc on every iteration is
+  // what made the loop sluggish and the value look unsettled.
   //
   // "No value" is a separate flag from the number: a negative reading is a
   // real vacuum reading (the controller sends boost as mbar above ambient),
@@ -351,7 +365,7 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
     // a trail of old indicator pixels and could paint over the overlapping
     // value row. A synthetic 0-25 PSI sweep was clean only when the whole
     // arc was repainted; incremental invalidation produced the green trail
-    // and the white block in the row.
+    // and a white block in the row. The larger 466 px arc keeps that habit.
     lv_obj_invalidate(g_arc);
   }
 
@@ -395,13 +409,6 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   }
 }
 
-void nextScheme() {
-  theme::nextScheme();
-  settings::setScheme((uint8_t)theme::scheme());
-  applyScheme();
-  Serial.printf("[ui] accent %s\n", theme::schemeName());
-}
-
 void setScheme(theme::Scheme s, bool persist) {
   theme::setScheme(s);
   if (persist) settings::setScheme((uint8_t)theme::scheme());
@@ -440,5 +447,13 @@ void setOpacity(uint8_t opacity) {
   g_masterOpa = opacity;
   applyOpacity();
 }
+
+void setSlide(int dx) {
+  if (!g_ready || dx == g_slideX) return;
+  g_slideX = dx;
+  lv_obj_set_pos(g_root, dx, 0);
+}
+
+int slide() { return g_slideX; }
 
 }  // namespace gauge_ui

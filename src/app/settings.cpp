@@ -16,11 +16,30 @@ namespace {
 
 constexpr char kNamespace[] = "gauge";
 constexpr char kKeyScheme[] = "scheme";
+constexpr char kKeySchemeVersion[] = "skver";
 constexpr char kKeyMin[] = "smin";
 constexpr char kKeyMax[] = "smax";
 constexpr char kKeyMode[] = "mode";
 constexpr char kKeyMount[] = "gmount";
 constexpr char kKeyFlip[] = "gflip";
+
+// The stored scheme is a byte in NVS, so a reordering is a migration, not a
+// cosmetic change. Version 1 is the 1.85 build's six accents:
+//   green 0, orange 1, red 2, blue 3, white 4, purple 5
+// Version 2 is OpenHaldex-S3-Dash's seven, which this build inherited:
+//   Midnight 0, Orange 1, Green 2, Blue 3, Purple 4, White 5, Red 6
+// A board that updates in place keeps the colour it was left on; a fresh
+// board has no scheme key at all and starts on Midnight.
+constexpr uint8_t kSchemeVersion = 2;
+constexpr uint8_t kOldSchemeCount = 6;
+constexpr uint8_t kOldToNew[kOldSchemeCount] = {
+    2,  // green  -> Green
+    1,  // orange -> Orange
+    6,  // red    -> Red
+    3,  // blue   -> Blue
+    5,  // white  -> White
+    4,  // purple -> Purple
+};
 
 Values g_values = {0, 0, 250, 0, 0, 0};
 
@@ -60,16 +79,42 @@ void begin() {
 
   // Reads must match store()'s putInt(): Preferences::getUChar() rejects a
   // four-byte record and returns the default, which silently reset the
-  // scheme to green while the scale survived.
-  const int32_t scheme = g_prefs.getInt(kKeyScheme, 0);
+  // scheme while the scale survived.
+  int32_t scheme = g_prefs.getInt(kKeyScheme, 0);
+  const int32_t schemeVersion = g_prefs.getInt(kKeySchemeVersion, 0);
   const int32_t min10 = g_prefs.getInt(kKeyMin, 0);
   const int32_t max10 = g_prefs.getInt(kKeyMax, 250);
   const int32_t mode = g_prefs.getInt(kKeyMode, 0);
   const int32_t mount = g_prefs.getInt(kKeyMount, 0);
   const int32_t flip = g_prefs.getInt(kKeyFlip, 0);
 
-  if (scheme >= 0 && scheme <= 7) {
+  // One-way migration from the 1.85 build's scheme order. isKey() is what
+  // separates "fresh board, default to Midnight" from "updated board, had
+  // Green stored as 0" - without it every new board would come up green.
+  if (schemeVersion < kSchemeVersion) {
+    const bool hadScheme = g_prefs.isKey(kKeyScheme);
+    if (hadScheme && scheme >= 0 && scheme < kOldSchemeCount) {
+      const int32_t mapped = kOldToNew[scheme];
+      Serial.printf("[set] scheme %ld -> %ld (1.85 order to dash order)\n",
+                    (long)scheme, (long)mapped);
+      scheme = mapped;
+    } else if (hadScheme) {
+      Serial.printf("[set] stored scheme %ld has no migration; Midnight\n",
+                    (long)scheme);
+      scheme = 0;
+    } else {
+      scheme = 0;
+    }
+    store(kKeyScheme, scheme);
+    store(kKeySchemeVersion, kSchemeVersion);
+  }
+
+  if (scheme >= 0 && scheme < kSchemeCount) {
     g_values.scheme = (uint8_t)scheme;
+  } else {
+    Serial.printf("[set] stored scheme %ld out of range; Midnight\n",
+                  (long)scheme);
+    g_values.scheme = 0;
   }
   if (validScale((int16_t)min10, (int16_t)max10)) {
     g_values.min10 = (int16_t)min10;
@@ -95,7 +140,7 @@ void begin() {
 const Values &get() { return g_values; }
 
 bool setScheme(uint8_t scheme) {
-  if (scheme > 7) return false;
+  if (scheme >= kSchemeCount) return false;
   if (scheme == g_values.scheme) return true;
   g_values.scheme = scheme;
   store(kKeyScheme, scheme);
