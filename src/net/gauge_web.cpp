@@ -200,6 +200,7 @@ async function tick(){
     $("live").textContent=
       "boost   "+val(s.boost10)+" psi"+(s.boost10===null?"  (no OHX_STATUS)":"")+
       "\nIAT     "+val(s.iat10)+" \u00b0C"+(s.iat10===null?"  (no Engine_3)":"")+
+      "\nOil    "+val(oil)+" \u00b0C"+(s.iat10===null?"  (no Engine_3)":"")+
       "\ng avg   "+valg(s.g100)+" g"+(s.g100===null?"  (no IMU)":"")+
       "\nG long  "+valg(s.gv100)+" g \u00b7 lat "+valg(s.gl100)+" g"+
       "\nOHX     "+s.ohx+" packets \u00b7 CANN "+s.cann+" packets"+
@@ -253,11 +254,15 @@ void handleStatus() {
   // as a live reading.
   char boost[8] = "null";
   char iat[8] = "null";
+  char oil[8] = "null";
   if (t.statusValid && !isnan(t.boostPsi)) {
     snprintf(boost, sizeof(boost), "%d", (int)lroundf(t.boostPsi * 10.0f));
   }
   if (t.iatValid && !isnan(t.iatC)) {
     snprintf(iat, sizeof(iat), "%d", (int)lroundf(t.iatC * 10.0f));
+  }
+  if (t.oilTempValid && !isnan(t.oilTempC)) {
+    snprintf(oil, sizeof(oil), "%d", (int)lroundf(t.oilTempC * 10.0f));
   }
 
   // The G-meter reading is already filtered and averaged. Null until a full
@@ -276,13 +281,13 @@ void handleStatus() {
   snprintf(buf, sizeof(buf),
            "{\"fw\":\"%s\",\"scheme\":%u,\"min10\":%d,\"max10\":%d,"
            "\"mode\":%u,\"mount\":%u,\"mres\":%u,\"flip\":%u,"
-           "\"boost10\":%s,\"iat10\":%s,\"g100\":%s,\"gv100\":%s,\"gl100\":%s,"
+           "\"boost10\":%s,\"iat10\":%s,\"oil10\":%s,\"g100\":%s,\"gv100\":%s,\"gl100\":%s,"
            "\"ch\":%u,\"rssi\":%d,"
            "\"pps\":%.1f,\"ohx\":%lu,\"cann\":%lu,\"clients\":%u,"
            "\"heap\":%lu}",
            config::kVersion, (unsigned)v.scheme, (int)v.min10, (int)v.max10,
            (unsigned)v.mode, (unsigned)v.mount, (unsigned)gmeter::mount(),
-           (unsigned)v.gflip, boost, iat, gavg, gvert, glat,
+           (unsigned)v.gflip, boost, iat, oil, gavg, gvert, glat,
            (unsigned)s.channel, (int)s.rssi, (double)g_pps,
            (unsigned long)s.statusPackets, (unsigned long)s.canPackets,
            (unsigned)WiFi.softAPgetStationNum(),

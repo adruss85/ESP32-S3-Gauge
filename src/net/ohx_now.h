@@ -39,6 +39,8 @@ struct Telemetry {
   // day/night and brightness; 58d is non-zero with the lights off, so it is
   // deliberately not used.
   int term58s;
+  bool oilTempValid;  // a fresh Cluster_2 (0x420) frame has arrived
+  float oilTempC;     // engine oil temperature, deg C
 };
 
 // Initialise WiFi + ESP-NOW and lock onto the controller's AP channel.

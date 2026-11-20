@@ -260,6 +260,8 @@ void loop() {
     t.boostPsi = GAUGE_CAPTURE_BOOST;
     t.iatValid = true;
     t.iatC = 42.0f;
+    t.oilTempValid = true;
+    t.oilTempC = 98.0f;
     s.raw = 1;
     s.statusPackets = 1;
 #endif

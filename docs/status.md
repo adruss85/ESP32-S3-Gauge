@@ -66,10 +66,14 @@ Last updated: 20 Nov 2026, firmware **0.6.0**.
 * `OHX_STATUS` is received from the `OpenHaldex-C6` AP on channel 1 at about
   **9.8 packets/s** with `rssi` around -75 dBm.
 * IAT decodes from CANN `Engine_3` (`0x380`) and displayed **4.5 C** on the
-  bench, matching `0.75 * byte1 - 48`.
+  bench, matching `0.75 * byte1 - 48`. Engine **oil temperature** is decoded
+  from the same CANN relay on `Cluster_2` (`0x420`) byte 3 as
+  `value - 60 °C` (DBC `OilTemperature_4_1`); `0xFF` means absent and draws
+  `-- °C` on the glass and `null` in `/api/status`. Needs a CANN sender to
+  confirm the decode on the bench.
 * **Setup AP and settings page.** `CANv-gauge`, open, on
   `http://192.168.4.1/`, started on the receiver's channel. `GET /api/status`
-  returns `fw`, scheme, scale, mode, mount/`mres`, flip, boost/IAT,
+  returns `fw`, scheme, scale, mode, mount/`mres`, flip, boost/IAT/oil,
   `g100`/`gv100`/`gl100`, channel, RSSI, packet rate and heap. With no IMU
   reading the G fields are `null`, exactly like `--` on the glass. Invalid
   values return HTTP 400; the scheme endpoint accepts `0-6`.
