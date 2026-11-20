@@ -114,12 +114,26 @@ input[type=file]{font-size:13px;color:#b9c4d0;max-width:100%}
 <button>Apply</button></form>
 <p class=sub id=ocmmsg></p></div>
 
+<div class=card><form id=ops class=row>
+<label>Min <input id=opmin type=number step=.1 required> bar</label>
+<label>Max <input id=opmax type=number step=.1 required> bar</label>
+<button>Apply</button></form>
+<p class=sub id=opsmsg></p></div>
+
+<div class=card><form id=cs class=row>
+<label>Min <input id=cmin type=number step=.1 required> °C</label>
+<label>Max <input id=cmax type=number step=.1 required> °C</label>
+<button>Apply</button></form>
+<p class=sub id=cmsg></p></div>
+
 <h2>Display</h2>
 <div class=card>
 <div class=row>
 <label><input type=radio name=mode value=0> Boost gauge</label>
 <label><input type=radio name=mode value=1> Oil temp</label>
 <label><input type=radio name=mode value=2> G-meter</label>
+<label><input type=radio name=mode value=3> Coolant</label>
+<label><input type=radio name=mode value=4> G-meter</label>
 </div>
 <div class=row style="margin-top:10px">
 <label>Mount <select id=mount>
@@ -172,6 +186,21 @@ document.addEventListener("DOMContentLoaded",function(){
     send("/scale?min="+encodeURIComponent($("min").value)+
          "&max="+encodeURIComponent($("max").value),"scalemsg");
   };
+  $("os").onsubmit=function(e){
+    e.preventDefault();
+    send("/oscale?min="+encodeURIComponent($("omin").value)+
+         "&max="+encodeURIComponent($("omax").value),"ocmmsg");
+  };
+  $("ops").onsubmit=function(e){
+    e.preventDefault();
+    send("/opscale?min="+encodeURIComponent($("opmin").value)+
+         "&max="+encodeURIComponent($("opmax").value),"opsmsg");
+  };
+  $("cs").onsubmit=function(e){
+    e.preventDefault();
+    send("/cscale?min="+encodeURIComponent($("cmin").value)+
+         "&max="+encodeURIComponent($("cmax").value),"cmsg");
+  };
   document.querySelectorAll("input[name=mode]").forEach(function(r){
     r.onchange=function(){send("/mode?m="+r.value,"gmsg")};
   });
@@ -201,6 +230,10 @@ async function tick(){
     if(document.activeElement!==$("max"))$("max").value=(s.max10/10).toFixed(1);
     if(document.activeElement!==$("omin"))$("omin").value=(s.omin10/10).toFixed(1);
     if(document.activeElement!==$("omax"))$("omax").value=(s.omax10/10).toFixed(1);
+    if(document.activeElement!==$("opmin"))$("opmin").value=(s.opmin10/10).toFixed(1);
+    if(document.activeElement!==$("opmax"))$("opmax").value=(s.opmax10/10).toFixed(1);
+    if(document.activeElement!==$("cmin"))$("cmin").value=(s.cmin10/10).toFixed(1);
+    if(document.activeElement!==$("cmax"))$("cmax").value=(s.cmax10/10).toFixed(1);
     document.querySelectorAll("input[name=mode]").forEach(function(r){
       r.checked=+r.value===s.mode;
     });
@@ -210,7 +243,11 @@ async function tick(){
       "boost   "+val(s.boost10)+" psi"+(s.boost10===null?"  (no OHX_STATUS)":"")+
       "\nIAT     "+val(s.iat10)+" \u00b0C"+(s.iat10===null?"  (no Engine_3)":"")+
       "\nOil    "+val(s.oil10)+" \u00b0C"+(s.oil10===null?"  (no Cluster_2)":"")+
+      "\nOilP   "+val(s.oilp10)+" bar"+(s.oilp10===null?"  (no Oil_Pressure)":"")+
+      "\nCool   "+val(s.coolant10)+" \u00b0C"+(s.coolant10===null?"  (no Engine_1)":"")+
       "\nOil scale "+(s.omin10/10).toFixed(1)+".."+(s.omax10/10).toFixed(1)+" \u00b0C"+
+      "\nOilP scale "+(s.opmin10/10).toFixed(1)+".."+(s.opmax10/10).toFixed(1)+" bar"+
+      "\nCool scale "+(s.cmin10/10).toFixed(1)+".."+(s.cmax10/10).toFixed(1)+" \u00b0C"+
       "\ng avg   "+valg(s.g100)+" g"+(s.g100===null?"  (no IMU)":"")+
       "\nG long  "+valg(s.gv100)+" g \u00b7 lat "+valg(s.gl100)+" g"+
       "\nOHX     "+s.ohx+" packets \u00b7 CANN "+s.cann+" packets"+
@@ -265,6 +302,8 @@ void handleStatus() {
   char boost[8] = "null";
   char iat[8] = "null";
   char oil[8] = "null";
+  char op[8] = "null";
+  char ct[8] = "null";
   if (t.statusValid && !isnan(t.boostPsi)) {
     snprintf(boost, sizeof(boost), "%d", (int)lroundf(t.boostPsi * 10.0f));
   }
@@ -273,6 +312,12 @@ void handleStatus() {
   }
   if (t.oilTempValid && !isnan(t.oilTempC)) {
     snprintf(oil, sizeof(oil), "%d", (int)lroundf(t.oilTempC * 10.0f));
+  }
+  if (t.oilPressValid && !isnan(t.oilPressBar)) {
+    snprintf(op, sizeof(op), "%d", (int)lroundf(t.oilPressBar * 10.0f));
+  }
+  if (t.coolantValid && !isnan(t.coolantC)) {
+    snprintf(ct, sizeof(ct), "%d", (int)lroundf(t.coolantC * 10.0f));
   }
 
   // The G-meter reading is already filtered and averaged. Null until a full
@@ -287,19 +332,21 @@ void handleStatus() {
     snprintf(glat, sizeof(glat), "%d", (int)lroundf(g.lateral * 100.0f));
   }
 
-  char buf[416];
+  char buf[512];
   snprintf(buf, sizeof(buf),
            "{\"fw\":\"%s\",\"scheme\":%u,\"min10\":%d,\"max10\":%d,"
            "\"mode\":%u,\"mount\":%u,\"mres\":%u,\"flip\":%u,"
-           "\"boost10\":%s,\"iat10\":%s,\"oil10\":%s,\"g100\":%s,\"gv100\":%s,\"gl100\":%s,"
-           "\"omin10\":%d,\"omax10\":%d,"
+           "\"boost10\":%s,\"iat10\":%s,\"oil10\":%s,\"oilp10\":%s,\"coolant10\":%s,\"g100\":%s,\"gv100\":%s,\"gl100\":%s,"
+           "\"omin10\":%d,\"omax10\":%d,\"opmin10\":%d,\"opmax10\":%d,\"cmin10\":%d,\"cmax10\":%d,"
            "\"ch\":%u,\"rssi\":%d,"
            "\"pps\":%.1f,\"ohx\":%lu,\"cann\":%lu,\"clients\":%u,"
            "\"heap\":%lu}",
            config::kVersion, (unsigned)v.scheme, (int)v.min10, (int)v.max10,
            (unsigned)v.mode, (unsigned)v.mount, (unsigned)gmeter::mount(),
-           (unsigned)v.gflip, boost, iat, oil, gavg, gvert, glat,
+           (unsigned)v.gflip, boost, iat, oil, op, ct, gavg, gvert, glat,
            (int)v.omin10, (int)v.omax10,
+           (int)v.omin10p, (int)v.omax10p,
+           (int)v.cmin10, (int)v.cmax10,
            (unsigned)s.channel, (int)s.rssi, (double)g_pps,
            (unsigned long)s.statusPackets, (unsigned long)s.canPackets,
            (unsigned)WiFi.softAPgetStationNum(),
@@ -351,6 +398,96 @@ void handleOilScale() {
   Serial.printf("[ui] oil scale %.1f..%.1f °C (web)\n", (double)min10 / 10.0,
                 (double)max10 / 10.0);
 
+  char buf[96];
+  snprintf(buf, sizeof(buf), "{\"ok\":true,\"min10\":%ld,\"max10\":%ld}",
+           (long)min10, (long)max10);
+  sendJson(200, buf);
+}
+
+void handleOilPressScale() {
+  if (!g_server.hasArg("min") || !g_server.hasArg("max")) {
+    reject("missing min or max");
+    return;
+  }
+  const String mn = g_server.arg("min");
+  const String mx = g_server.arg("max");
+  char *end = nullptr;
+  const float fmin = strtof(mn.c_str(), &end);
+  if (end == mn.c_str() || *end != '\0') {
+    reject("min is not a number");
+    return;
+  }
+  const float fmax = strtof(mx.c_str(), &end);
+  if (end == mx.c_str() || *end != '\0') {
+    reject("max is not a number");
+    return;
+  }
+  if (!isfinite(fmin) || !isfinite(fmax)) {
+    reject("scale is not finite");
+    return;
+  }
+  const int32_t min10 = lroundf(fmin * 10.0f);
+  const int32_t max10 = lroundf(fmax * 10.0f);
+  // Oil pressure scale: realistic band (0..100 bar in tenths).
+  // Accept 0..1000 (0.0..100.0 bar); the display layer validates the span itself.
+  if (min10 < 0 || min10 > 1000 || max10 < 0 || max10 > 1000) {
+    reject("oil press scale outside 0.0 .. 100.0 bar");
+    return;
+  }
+  if (!settings::setOilPressScale((int16_t)min10, (int16_t)max10)) {
+    reject("min must be below max and the span at least 1.0 bar");
+    return;
+  }
+#if GAUGE_HAS_DISPLAY
+  dashboard::applyOilPressScale((int16_t)min10, (int16_t)max10);
+#endif
+  Serial.printf("[ui] oil press scale %.1f..%.1f bar (web)\n", (double)min10 / 10.0,
+                (double)max10 / 10.0);
+  char buf[96];
+  snprintf(buf, sizeof(buf), "{\"ok\":true,\"min10\":%ld,\"max10\":%ld}",
+           (long)min10, (long)max10);
+  sendJson(200, buf);
+}
+
+void handleCoolantScale() {
+  if (!g_server.hasArg("min") || !g_server.hasArg("max")) {
+    reject("missing min or max");
+    return;
+  }
+  const String mn = g_server.arg("min");
+  const String mx = g_server.arg("max");
+  char *end = nullptr;
+  const float fmin = strtof(mn.c_str(), &end);
+  if (end == mn.c_str() || *end != '\0') {
+    reject("min is not a number");
+    return;
+  }
+  const float fmax = strtof(mx.c_str(), &end);
+  if (end == mx.c_str() || *end != '\0') {
+    reject("max is not a number");
+    return;
+  }
+  if (!isfinite(fmin) || !isfinite(fmax)) {
+    reject("scale is not finite");
+    return;
+  }
+  const int32_t min10 = lroundf(fmin * 10.0f);
+  const int32_t max10 = lroundf(fmax * 10.0f);
+  // Coolant temperature scale: (-40..200 °C in tenths).
+  // Accept -400..2000 (-40.0..200.0 °C); the display layer validates the span itself.
+  if (min10 < -400 || min10 > 2000 || max10 < -400 || max10 > 2000) {
+    reject("coolant scale outside -40.0 .. 200.0 °C");
+    return;
+  }
+  if (!settings::setCoolantScale((int16_t)min10, (int16_t)max10)) {
+    reject("min must be below max and the span at least 10.0 °C");
+    return;
+  }
+#if GAUGE_HAS_DISPLAY
+  dashboard::applyCoolantScale((int16_t)min10, (int16_t)max10);
+#endif
+  Serial.printf("[ui] coolant scale %.1f..%.1f °C (web)\n", (double)min10 / 10.0,
+                (double)max10 / 10.0);
   char buf[96];
   snprintf(buf, sizeof(buf), "{\"ok\":true,\"min10\":%ld,\"max10\":%ld}",
            (long)min10, (long)max10);
@@ -436,8 +573,8 @@ void handleMode() {
     return;
   }
   const String arg = g_server.arg("m");
-  if (arg.length() != 1 || arg[0] < '0' || arg[0] > '2') {
-    reject("mode must be 0, 1 or 2");
+  if (arg.length() != 1 || arg[0] < '0' || arg[0] > '4') {
+    reject("mode must be 0, 1, 2, 3 or 4");
     return;
   }
   dashboard::setMode((dashboard::Mode)(arg[0] - '0'), true, "web");
@@ -540,6 +677,8 @@ void startServer() {
   g_server.on("/gmount", HTTP_POST, handleGMount);
   g_server.on("/gzero", HTTP_POST, handleGZero);
   g_server.on("/oscale", HTTP_POST, handleOilScale);
+  g_server.on("/opscale", HTTP_POST, handleOilPressScale);
+  g_server.on("/cscale", HTTP_POST, handleCoolantScale);
   g_server.on("/update", HTTP_POST, handleOtaDone, handleOtaUpload);
   g_server.on("/favicon.ico", HTTP_GET, []() { g_server.send(204, "text/plain", ""); });
   g_server.onNotFound([]() { g_server.send(404, "text/plain", "not found"); });

@@ -16,9 +16,11 @@
 namespace dashboard {
 
 enum class Mode : uint8_t {
-  Gauge = 0,  // boost psi face (270 deg arc, BOOST PSI)
-  Oil = 1,     // engine oil temp face (270 deg arc, OIL deg C)
-  GMeter = 2,  // accelerometer dot + tail + readout
+  Gauge = 0,      // boost psi face (270 deg arc, BOOST PSI)
+  Oil = 1,        // engine oil temp face (270 deg arc, OIL °C)
+  OilPress = 2,   // oil pressure face (270 deg arc, OIL PRESSURE bar)
+  Coolant = 3,    // coolant temp face (270 deg arc, COOLANT °C)
+  GMeter = 4,     // accelerometer dot + tail + readout
 };
 
 // Which transition draws a mode change. A key or web change cross-fades; a
@@ -45,6 +47,8 @@ void nextScheme();
 void setScheme(theme::Scheme s, bool persist = true);
 bool applyScale(int16_t min10, int16_t max10);
 bool applyOilScale(int16_t min10, int16_t max10);
+bool applyOilPressScale(int16_t min10, int16_t max10);
+bool applyCoolantScale(int16_t min10, int16_t max10);
 
 void setMount(gmeter::Mount m, bool flip, bool persist = true);
 void zeroG();

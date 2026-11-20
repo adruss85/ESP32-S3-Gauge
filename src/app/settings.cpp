@@ -25,6 +25,10 @@ constexpr char kKeyMount[] = "gmount";
 constexpr char kKeyFlip[] = "gflip";
 constexpr char kKeyOilMin[] = "omin";
 constexpr char kKeyOilMax[] = "omax";
+constexpr char kKeyOilPressMin[] = "omin10p";
+constexpr char kKeyOilPressMax[] = "omax10p";
+constexpr char kKeyCoolantMin[] = "cmin10";
+constexpr char kKeyCoolantMax[] = "cmax10";
 
 // The stored scheme is a byte in NVS, so a reordering is a migration, not a
 // cosmetic change. Version 1 is the 1.85 build's six accents:
@@ -52,10 +56,10 @@ constexpr uint8_t kModeVersion = 2;
 constexpr uint8_t kOldModeCount = 2;
 constexpr uint8_t kOldToNewMode[kOldModeCount] = {
     0,  // old 0 (gauge)  -> new 0 (gauge)
-    2,  // old 1 (g-meter)-> new 2 (g-meter)
+    4,  // old 1 (g-meter)-> new 4 (g-meter)
 };
 
-Values g_values = {0, 0, 250, 0, 0, 0, 400, 1200};
+Values g_values = {0, 0, 250, 0, 0, 0, 400, 1200, 40, 1200, 4, 20};
 
 Preferences g_prefs;
 bool g_open = false;
@@ -84,6 +88,30 @@ bool validOilScale(int16_t min10, int16_t max10) {
   if (min10 >= max10) return false;
   const int16_t span = (int16_t)(max10 - min10);
   return span >= kOilSpanMin10;
+}
+
+// Oil pressure scale validator: realistic band (0..100 bar in tenths).
+// Six readable labels need at least 1 bar span.
+bool validOilPressScale(int16_t min10, int16_t max10) {
+  constexpr int16_t kOilPressMin10 = 0;     // 0.0 bar
+  constexpr int16_t kOilPressMax10 = 1000;  // 100.0 bar
+  constexpr int16_t kOilPressSpanMin10 = 10; //   1.0 bar
+  if (min10 < kOilPressMin10 || max10 > kOilPressMax10) return false;
+  if (min10 >= max10) return false;
+  const int16_t span = (int16_t)(max10 - min10);
+  return span >= kOilPressSpanMin10;
+}
+
+// Coolant temperature scale validator: (-40..200 °C in tenths).
+// Six readable labels need at least 10 °C span.
+bool validCoolantScale(int16_t min10, int16_t max10) {
+  constexpr int16_t kCoolantMin10 = -400;   // -40.0 °C
+  constexpr int16_t kCoolantMax10 = 2000;   // 200.0 °C
+  constexpr int16_t kCoolantSpanMin10 = 100; //  10.0 °C
+  if (min10 < kCoolantMin10 || max10 > kCoolantMax10) return false;
+  if (min10 >= max10) return false;
+  const int16_t span = (int16_t)(max10 - min10);
+  return span >= kCoolantSpanMin10;
 }
 
 // A failed write only costs persistence, so it is logged and ignored rather
@@ -181,9 +209,29 @@ void begin() {
     Serial.printf("[set] stored oil scale %ld..%ld rejected; using 40..120\n",
                   (long)omin10, (long)omax10);
   }
-  if (mode >= 0 && mode <= 2) g_values.mode = (uint8_t)mode;
+  if (mode >= 0 && mode <= 4) g_values.mode = (uint8_t)mode;
   if (mount >= 0 && mount <= 2) g_values.mount = (uint8_t)mount;
   if (flip >= 0 && flip <= 1) g_values.gflip = (uint8_t)flip;
+
+  const int32_t omin10p = g_prefs.getInt(kKeyOilPressMin, 40);
+  const int32_t omax10p = g_prefs.getInt(kKeyOilPressMax, 200);
+  const int32_t cmin10 = g_prefs.getInt(kKeyCoolantMin, 400);
+  const int32_t cmax10 = g_prefs.getInt(kKeyCoolantMax, 1200);
+
+  if (validOilPressScale((int16_t)omin10p, (int16_t)omax10p)) {
+    g_values.omin10p = (int16_t)omin10p;
+    g_values.omax10p = (int16_t)omax10p;
+  } else if (omin10p != 40 || omax10p != 200) {
+    Serial.printf("[set] stored oil press scale %ld..%ld rejected; using 4..20\n",
+                  (long)omin10p, (long)omax10p);
+  }
+  if (validCoolantScale((int16_t)cmin10, (int16_t)cmax10)) {
+    g_values.cmin10 = (int16_t)cmin10;
+    g_values.cmax10 = (int16_t)cmax10;
+  } else if (cmin10 != 400 || cmax10 != 1200) {
+    Serial.printf("[set] stored coolant scale %ld..%ld rejected; using 40..120\n",
+                  (long)cmin10, (long)cmax10);
+  }
 
   Serial.printf("[set] scheme %u, scale %.1f..%.1f PSI\n", (unsigned)g_values.scheme,
                 (double)g_values.min10 / 10.0, (double)g_values.max10 / 10.0);
@@ -192,11 +240,19 @@ void begin() {
   const char *mountName = g_values.mount == 2   ? "auto"
                           : g_values.mount == 1 ? "flat"
                                                 : "upright";
-  const char *modeName = g_values.mode == 2 ? "g-meter"
+  const char *modeName = g_values.mode == 4 ? "g-meter"
+                         : g_values.mode == 3 ? "coolant"
+                         : g_values.mode == 2 ? "oil-press"
                          : g_values.mode == 1 ? "oil"
                                               : "gauge";
   Serial.printf("[set] mode %s, mount %s, flip %u\n", modeName, mountName,
                 (unsigned)g_values.gflip);
+  Serial.printf("[set] oil press scale %.1f..%.1f bar\n",
+                (double)g_values.omin10p / 10.0,
+                (double)g_values.omax10p / 10.0);
+  Serial.printf("[set] coolant scale %.1f..%.1f °C\n",
+                (double)g_values.cmin10 / 10.0,
+                (double)g_values.cmax10 / 10.0);
 }
 
 const Values &get() { return g_values; }
@@ -229,8 +285,28 @@ bool setOilScale(int16_t min10, int16_t max10) {
   return true;
 }
 
+bool setOilPressScale(int16_t min10, int16_t max10) {
+  if (!validOilPressScale(min10, max10)) return false;
+  if (min10 == g_values.omin10p && max10 == g_values.omax10p) return true;
+  g_values.omin10p = min10;
+  g_values.omax10p = max10;
+  store(kKeyOilPressMin, min10);
+  store(kKeyOilPressMax, max10);
+  return true;
+}
+
+bool setCoolantScale(int16_t min10, int16_t max10) {
+  if (!validCoolantScale(min10, max10)) return false;
+  if (min10 == g_values.cmin10 && max10 == g_values.cmax10) return true;
+  g_values.cmin10 = min10;
+  g_values.cmax10 = max10;
+  store(kKeyCoolantMin, min10);
+  store(kKeyCoolantMax, max10);
+  return true;
+}
+
 bool setMode(uint8_t mode) {
-  if (mode > 2) return false;
+  if (mode > 4) return false;
   if (mode == g_values.mode) return true;
   g_values.mode = mode;
   store(kKeyMode, mode);

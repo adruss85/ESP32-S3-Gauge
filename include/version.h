@@ -3,17 +3,18 @@
 // The version string is the changelog. Bump it for built changes, not for
 // docs-only commits.
 //
-// 0.6.1 - Oil temperature page: a dedicated 270° arc face with °C value,
-// IAT readout, configurable min/max scale (40–120 °C defaults, adjustable
-// from the web page in 0.1 °C steps). Swipe transitions between boost,
-// oil and G-meter. Three-mode cycle: Gauge → Oil → G-meter → Gauge. BOOT
-// key / web page keep 260 ms cross-fade. Oil temperature decoded from
-// CANN Cluster_2 (0x420) byte 3 with -60 °C offset; 0xFF absent → "-- °C"
-// scale defaults 40–120 °C, web configurable. Oil scale persisted in NVS.
-// Mode migration: old mode 1 (G-meter) maps to new mode 2 so existing
-// boards keep their screen. Settings include oil min/max persist and a
-// web-page /oscale endpoint. Both esp32s3 and esp32dev builds succeed.
-// Build sizes: flash 1,429,043 B (21.8%), RAM 118,608 B (36.2%).
+// 0.6.2 - Coolant and oil-pressure pages: a fifth and sixth face around
+// the same 270° arc and value row as the boost gauge. Coolant from
+// Engine_1 (0x280) byte 1 (1 °C/count, -40 °C offset; 0xFF absent -> "--
+// °C"). Oil pressure from Cluster_2 (0x420) byte 4 (0.1 bar/count; 0xFF
+// absent -> "-- bar"). Five-mode cycle now Gauge -> Oil -> OilPress ->
+// Coolant -> G-meter -> Gauge. Coolant scale (40..120 °C default, min span
+// 10 °C) and oil-pressure scale (4..20 bar default, min span 1 bar) added;
+// persisted in NVS, configurable from the web page in 0.1 steps through
+// the new /cscale and /opscale endpoints, reported in /api/status.
+// Mode migration: the two-screen-to-three-screen change is superseded - old
+// mode 1 (G-meter) now maps to new mode 4. Build sizes: flash 1,440,087 B
+// (22.0%), RAM 118,808 B (36.3%).
 // 0.5.2 - Serialise the panel flush to one partial draw buffer. The
 //         two-buffer path let the band, dot and text areas overlap on the
 //         wire, leaving intermittent artifacts inside the dot/text boxes.
@@ -56,4 +57,4 @@
 //         baseline, and the link lamp is gone.
 // 0.2.0 - First gauge build: 270-degree boost arc and IAT readout.
 // 0.1.0 - Headless CANN listener.
-#define OHX_GAUGE_VERSION "0.6.1"
+#define OHX_GAUGE_VERSION "0.6.2"

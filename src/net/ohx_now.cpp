@@ -104,6 +104,12 @@ volatile float g_iatC = NAN;
 volatile int g_term58s = -1;  // Terminal 58s, 0..99; -1 = not heard
 volatile uint32_t g_lastOilMs = 0;
 volatile float g_oilC = NAN;
+
+volatile uint32_t g_lastCoolantMs = 0;
+volatile float g_coolantC = NAN;
+
+volatile uint32_t g_lastOilPressMs = 0;
+volatile float g_oilPressBar = NAN;
 volatile bool g_schemeEvent = false;
 volatile bool g_modeEvent = false;
 bool g_cruiseCombo = false;
@@ -274,6 +280,10 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   bool haveCruise = false;
   bool cruiseCombo = false;
   bool cruiseMode = false;
+  bool haveCoolant = false;
+  float coolant = NAN;
+  bool haveOilPress = false;
+  float oilPress = NAN;
 
   size_t off = sizeof(CannHdr);
   for (uint8_t i = 0; i < hdr.count; i++) {
@@ -308,6 +318,20 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     if (id == 0x380 && frameLen >= 2 && data[off + 1] != 0xFF) {
       iat = (float)data[off + 1] * 0.75f - 48.0f;
       haveIat = true;
+    }
+
+    // Engine_1 (0x280): byte 1 is CoolantTemp_4_1, 1 C/count with -40 C
+    // offset. 0xFF means no value.
+    if (id == 0x280 && frameLen >= 2 && data[off + 1] != 0xFF) {
+      coolant = (float)data[off + 1] - 40.0f;
+      haveCoolant = true;
+    }
+
+    // Cluster_2 (0x420): byte 4 is OilPressure_4_1, 0.1 bar/count.
+    // 0xFF means no value.
+    if (id == 0x420 && frameLen >= 5 && data[off + 4] != 0xFF) {
+      oilPress = (float)data[off + 4] * 0.1f;
+      haveOilPress = true;
     }
 
     // Cluster_2 (0x420): Terminal 58s is byte 6 bits 0-6; bit 7 is its error
@@ -379,9 +403,13 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     g_iatC = iat;
     g_lastIatMs = now;
   }
-  if (haveOilTemp) {
-    g_oilC = oilTemp;
-    g_lastOilMs = now;
+  if (haveCoolant) {
+    g_coolantC = coolant;
+    g_lastCoolantMs = now;
+  }
+  if (haveOilPress) {
+    g_oilPressBar = oilPress;
+    g_lastOilPressMs = now;
   }
   if (haveDimmer) g_term58s = dimmer;
   if (haveCruise) {
@@ -833,8 +861,12 @@ Telemetry telemetry() {
   }
   t.iatValid = g_lastIatMs && (uint32_t)(now - g_lastIatMs) <= kIatFreshMs;
   t.iatC = t.iatValid ? (float)g_iatC : NAN;
+  t.coolantValid = g_lastCoolantMs && (uint32_t)(now - g_lastCoolantMs) <= kIatFreshMs;
+  t.coolantC = t.coolantValid ? (float)g_coolantC : NAN;
   t.oilTempValid = g_lastOilMs && (uint32_t)(now - g_lastOilMs) <= kIatFreshMs;
   t.oilTempC = t.oilTempValid ? (float)g_oilC : NAN;
+  t.oilPressValid = g_lastOilPressMs && (uint32_t)(now - g_lastOilPressMs) <= kIatFreshMs;
+  t.oilPressBar = t.oilPressValid ? (float)g_oilPressBar : NAN;
   t.term58s = g_term58s;
   taskEXIT_CRITICAL(&g_mux);
   return t;

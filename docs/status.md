@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 20 Nov 2026, firmware **0.6.1**.
+Last updated: 20 Nov 2026, firmware **0.6.2**.
 
 > **Hardware state.** The gauge runs on a **Waveshare ESP32-S3-Touch-AMOLED-1.75**
 > (466x466 CO5300 AMOLED, CST9217 touch). The 1.85 unit this firmware was
@@ -130,6 +130,16 @@ Last updated: 20 Nov 2026, firmware **0.6.1**.
   flash **1,429,043 B (21.8%)**, static RAM **118,608 B (36.2%)**; headless
   `esp32dev` 954,044 B (72.8%) flash / 48,384 B (14.8%) RAM. Both builds pass.
 
+- [x] **Coolant and oil-pressure pages (0.6.2).** New dedicated 270° arc faces:
+  Coolant from Engine_1 (0x280) byte 1 (1 °C/count, -40 °C offset; 0xFF →
+  "-- °C"). Oil pressure from Cluster_2 (0x420) byte 4 (0.1 bar/count;
+  0xFF absent → "-- bar"). Five-mode cycle now Gauge → Oil → OilPress →
+  Coolant → GMeter → Gauge with 280 ms slide. Coolant scale (default 40..120
+  °C, min span 10 °C) and oil-pressure scale (default 4..20 bar, min span 1
+  bar) added to NVS (`src/app/settings.cpp`), configurable from the web page
+  via `/cscale` and `/opscale`, reported in /api/status. Swipe order matches
+  the touch gestures (tap steps scheme, horizontal swipe slides).
+
 ## Not verified yet
 
 * **Touch gestures on the glass.** The controller answers and reports its own
@@ -188,14 +198,14 @@ Last updated: 20 Nov 2026, firmware **0.6.1**.
 * **Long-run stability.** No soak test past a few minutes; PSRAM pool and
   internal RAM have not been watched over hours.
 
-## Build sizes, 0.6.0
+## Build sizes, 0.6.2
 
 Measured with `./.venv/bin/pio run -e esp32s3`:
 
 | Resource | Used | Capacity | Note |
 |---|---|---|---|
-| Flash | 1,422,999 B (21.7%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
-| Static RAM | 118,464 B (36.2%) | 327,680 B | one 466×48 draw buffer (44,736 B) |
+| Flash | 1,440,087 B (22.0%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
+| Static RAM | 118,808 B (36.3%) | 327,680 B | one 466×48 draw buffer (44,736 B) |
 | LVGL pool | 128 KB | — | allocated from 8 MB PSRAM |
 | Draw buffers | 44,736 B | — | 1 x 466x48 RGB565, internal RAM |
 | G-meter canvas | 361,616 B | — | 466x388 RGB565 in PSRAM, one object |

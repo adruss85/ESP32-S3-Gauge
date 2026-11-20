@@ -41,6 +41,14 @@ struct Telemetry {
   int term58s;
   bool oilTempValid;  // a fresh Cluster_2 (0x420) frame has arrived
   float oilTempC;     // engine oil temperature, deg C
+
+  // Coolant temperature from Engine_1 (0x280) byte 1.
+  bool coolantValid;    // a fresh Engine_1 (0x280) frame has arrived
+  float coolantC;       // engine coolant temperature, deg C
+
+  // Oil pressure from the car's CAN (bar, 0.1 bar resolution).
+  bool oilPressValid;   // a fresh oil pressure frame has arrived
+  float oilPressBar;    // oil pressure in bar (tenths * 0.1)
 };
 
 // Initialise WiFi + ESP-NOW and lock onto the controller's AP channel.

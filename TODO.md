@@ -92,6 +92,13 @@ Open items for the gauge. Finished work lives in `include/version.h` and
       absent → "-- °C". Three-mode cycle: Gauge → Oil → G-meter → Gauge.
       Mode migration: old mode 1 → new mode 2. Oil scale persisted in NVS,
       web /oscale endpoint, JSON status includes omin10/omax10/oil10.
+- [x] **Coolant and oil-pressure pages (0.6.2).** Dedicated 270° arc faces:
+  Coolant from Engine_1 (0x280) byte 1 (1 °C/count, -40 °C offset; 0xFF →
+  "-- °C"). Oil pressure from Cluster_2 (0x420) byte 4 (0.1 bar/count;
+  0xFF absent → "-- bar"). Five-mode cycle Gauge → Oil → OilPress → Coolant →
+  GMeter → Gauge. Scale defaults 40..120 °C (min span 10 °C) and 4..20 bar
+  (min span 1 bar), editable via /cscale /opscale. JSON status reports all.
+- [ ] **Mode migration for five modes.** (Old mode 1 → new mode 4 mapping.)
 - [x] **Boost scale above 25 PSI.** The scale is a setting now; the arc
       re-ranges and the numeric value is never clipped.
 - [x] **OTA path.** The setup AP serves `/update`; the inactive slot is
