@@ -2,8 +2,8 @@
 // oil_press_ui.cpp - the digital oil pressure face
 //
 // Same layout as the boost gauge: 270 degree arc with six scale labels,
-// a large value with decimal point on the baseline, an OIL PRESSURE bar
-// caption. The arc scale is configurable (0.1 bar steps) and persisted in NVS.
+// a large value with decimal point on the baseline, an OIL PRESSURE PSI
+// caption. The arc scale is configurable (1 PSI steps) and persisted in NVS.
 // =====================================================================
 #include "ui/oil_press_ui.h"
 
@@ -18,9 +18,9 @@
 namespace oil_press_ui {
 namespace {
 
-int16_t g_min10 = 40;   // 4.0 bar * 10
-int16_t g_max10 = 200;  // 20.0 bar * 10
-int g_arcRange = 160;   // (200 - 40) * 10
+int16_t g_min10 = 580;  // 58.0 PSI * 10 (≈4 bar)
+int16_t g_max10 = 2900; // 290.0 PSI * 10 (≈20 bar)
+int g_arcRange = 2320;  // (2900 - 580)
 
 int32_t g_lastDrawn = INT32_MIN;
 bool g_scaleDirty = true;
@@ -205,7 +205,7 @@ void begin() {
   addValueRow(g_root);
 
   g_unit = lv_label_create(g_root);
-  lv_label_set_text(g_unit, "OIL PRESSURE BAR");
+  lv_label_set_text(g_unit, "OIL PRESSURE PSI");
   lv_obj_set_style_text_font(g_unit, FONT_LABEL, 0);
   lv_obj_set_style_text_color(g_unit, theme::accent(), 0);
   lv_obj_set_style_text_letter_space(g_unit, 5, 0);
@@ -230,7 +230,7 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   if (!g_ready) return;
 
   static float shown = NAN;
-  const float target = t.oilPressValid ? t.oilPressBar : NAN;
+  const float target = t.oilPressValid ? t.oilPressPsi : NAN;
 
   if (isnan(target)) {
     shown = NAN;
@@ -301,7 +301,7 @@ void setScheme(theme::Scheme s, bool persist) {
 
 bool applyScale(int16_t min10, int16_t max10) {
   if (min10 >= max10) return false;
-  // Oil pressure: 10 tenths min span (1.0 bar) - typical resolution is 0.1 bar
+  // Oil pressure: 10 tenths min span (1.0 PSI) - typical resolution is 1 PSI
   if ((int16_t)(max10 - min10) < 10) return false;
 
   g_min10 = min10;
@@ -341,7 +341,7 @@ int slide() { return g_slideX; }
 
 lv_obj_t *root() { return g_root; }
 
-void captureRender(float oilPressBar, float iatC) {
+void captureRender(float oilPressPsi, float iatC) {
   // This is a placeholder - the actual capture uses gauge_ui's captureRender
   // which handles the scheme sweep. The oil press face would need its own capture
   // if we want to photograph it separately.

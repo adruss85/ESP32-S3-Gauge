@@ -46,9 +46,19 @@ struct Telemetry {
   bool coolantValid;    // a fresh Engine_1 (0x280) frame has arrived
   float coolantC;       // engine coolant temperature, deg C
 
-  // Oil pressure from the car's CAN (bar, 0.1 bar resolution).
-  bool oilPressValid;   // a fresh oil pressure frame has arrived
-  float oilPressBar;    // oil pressure in bar (tenths * 0.1)
+  // Oil pressure from the car's CAN (PSI, 1 PSI resolution).
+  bool oilPressValid;    // a fresh oil pressure frame has arrived
+  float oilPressPsi;     // oil pressure in PSI (tenths * 0.1)
+
+  // Wheel slip from OHX_STATUS: FL, FR, RL, RR in percent.
+  // -128 (OHX_NONE8) means no value. Positive = wheel faster than reference (TC),
+  // negative = wheel slower (ABS).
+  bool slipValid;
+  int8_t slip[4];
+
+  // Haldex lock actual from OHX_STATUS (0-100%, OHX_NONE8 = no value).
+  bool lockActualValid;
+  uint8_t lockActual;
 };
 
 // Initialise WiFi + ESP-NOW and lock onto the controller's AP channel.

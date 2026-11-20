@@ -313,8 +313,8 @@ void handleStatus() {
   if (t.oilTempValid && !isnan(t.oilTempC)) {
     snprintf(oil, sizeof(oil), "%d", (int)lroundf(t.oilTempC * 10.0f));
   }
-  if (t.oilPressValid && !isnan(t.oilPressBar)) {
-    snprintf(op, sizeof(op), "%d", (int)lroundf(t.oilPressBar * 10.0f));
+  if (t.oilPressValid && !isnan(t.oilPressPsi)) {
+    snprintf(op, sizeof(op), "%d", (int)lroundf(t.oilPressPsi * 10.0f));
   }
   if (t.coolantValid && !isnan(t.coolantC)) {
     snprintf(ct, sizeof(ct), "%d", (int)lroundf(t.coolantC * 10.0f));
@@ -428,20 +428,20 @@ void handleOilPressScale() {
   }
   const int32_t min10 = lroundf(fmin * 10.0f);
   const int32_t max10 = lroundf(fmax * 10.0f);
-  // Oil pressure scale: realistic band (0..100 bar in tenths).
-  // Accept 0..1000 (0.0..100.0 bar); the display layer validates the span itself.
-  if (min10 < 0 || min10 > 1000 || max10 < 0 || max10 > 1000) {
-    reject("oil press scale outside 0.0 .. 100.0 bar");
+  // Oil pressure scale: realistic band (0..1500 PSI in tenths).
+  // Accept 0..15000 (0.0..1500.0 PSI); the display layer validates the span itself.
+  if (min10 < 0 || min10 > 15000 || max10 < 0 || max10 > 15000) {
+    reject("oil press scale outside 0.0 .. 1500.0 PSI");
     return;
   }
   if (!settings::setOilPressScale((int16_t)min10, (int16_t)max10)) {
-    reject("min must be below max and the span at least 1.0 bar");
+    reject("min must be below max and the span at least 1.0 PSI");
     return;
   }
 #if GAUGE_HAS_DISPLAY
   dashboard::applyOilPressScale((int16_t)min10, (int16_t)max10);
 #endif
-  Serial.printf("[ui] oil press scale %.1f..%.1f bar (web)\n", (double)min10 / 10.0,
+  Serial.printf("[ui] oil press scale %.1f..%.1f PSI (web)\n", (double)min10 / 10.0,
                 (double)max10 / 10.0);
   char buf[96];
   snprintf(buf, sizeof(buf), "{\"ok\":true,\"min10\":%ld,\"max10\":%ld}",

@@ -21,6 +21,7 @@
 #include "ui/oil_ui.h"
 #include "ui/oil_press_ui.h"
 #include "ui/coolant_ui.h"
+#include "ui/drive_ui.h"
 #include "ui/splash.h"
 
 #ifndef GAUGE_CAPTURE_GMETER
@@ -49,6 +50,7 @@ uint8_t g_gmOpa = 0;
 uint8_t g_oilOpa = 255;
 uint8_t g_oilPressOpa = 255;
 uint8_t g_coolantOpa = 255;
+uint8_t g_driveOpa = 255;
 uint8_t g_fromGauge = 255;
 uint8_t g_fromGm = 0;
 uint32_t g_lastSampleMs = 0;
@@ -66,6 +68,7 @@ void applyOpacity() {
   oil_ui::setOpacity(g_oilOpa);
   oil_press_ui::setOpacity(g_oilPressOpa);
   coolant_ui::setOpacity(g_coolantOpa);
+  drive_ui::setOpacity(g_driveOpa);
 }
 
 void setVisible() {
@@ -74,6 +77,7 @@ void setVisible() {
   oil_ui::setVisible(g_mode == Mode::Oil);
   oil_press_ui::setVisible(g_mode == Mode::OilPress);
   coolant_ui::setVisible(g_mode == Mode::Coolant);
+  drive_ui::setVisible(g_mode == Mode::Drive);
 }
 
 // Offset of a screen part-way through a slide. `from` is where it started,
@@ -97,6 +101,7 @@ static void setSlideOf(Mode m, int dx) {
     case Mode::OilPress: oil_press_ui::setSlide(dx); break;
     case Mode::Coolant: coolant_ui::setSlide(dx); break;
     case Mode::GMeter:  gmeter_ui::setSlide(dx); break;
+    case Mode::Drive:   drive_ui::setSlide(dx); break;
   }
 }
 
@@ -132,7 +137,7 @@ void onGesture(touch::Gesture g) {
   g_slideDir = (g == touch::Gesture::SwipeLeft) ? 1 : -1;
   Serial.printf("[ui] touch swipe %s\n", g_slideDir > 0 ? "left" : "right");
 
-  // Swipe order: boost -> oil -> oil pressure -> coolant -> G-meter -> boost.
+  // Swipe order: boost -> oil -> oil pressure -> coolant -> G-meter -> Drive -> boost.
   // SwipeLeft advances, SwipeRight goes back.
   if (g_mode == Mode::Gauge && g_slideDir > 0) {
     setMode(Mode::Oil, true, "swipe", Anim::Slide);
@@ -143,17 +148,21 @@ void onGesture(touch::Gesture g) {
   } else if (g_mode == Mode::Coolant && g_slideDir > 0) {
     setMode(Mode::GMeter, true, "swipe", Anim::Slide);
   } else if (g_mode == Mode::GMeter && g_slideDir > 0) {
+    setMode(Mode::Drive, true, "swipe", Anim::Slide);
+  } else if (g_mode == Mode::Drive && g_slideDir > 0) {
     setMode(Mode::Gauge, true, "swipe", Anim::Slide);
   } else if (g_mode == Mode::Gauge && g_slideDir < 0) {
-    setMode(Mode::GMeter, true, "swipe", Anim::Slide);
+    setMode(Mode::Drive, true, "swipe", Anim::Slide);
+  } else if (g_mode == Mode::Oil && g_slideDir < 0) {
+    setMode(Mode::Gauge, true, "swipe", Anim::Slide);
   } else if (g_mode == Mode::OilPress && g_slideDir < 0) {
     setMode(Mode::Oil, true, "swipe", Anim::Slide);
   } else if (g_mode == Mode::Coolant && g_slideDir < 0) {
     setMode(Mode::OilPress, true, "swipe", Anim::Slide);
-  } else if (g_mode == Mode::Oil && g_slideDir < 0) {
-    setMode(Mode::Gauge, true, "swipe", Anim::Slide);
   } else if (g_mode == Mode::GMeter && g_slideDir < 0) {
     setMode(Mode::Coolant, true, "swipe", Anim::Slide);
+  } else if (g_mode == Mode::Drive && g_slideDir < 0) {
+    setMode(Mode::GMeter, true, "swipe", Anim::Slide);
   }
 }
 
@@ -178,6 +187,9 @@ void begin() {
   coolant_ui::begin();
   coolant_ui::setScheme((theme::Scheme)v.scheme);
   applyCoolantScale(v.cmin10, v.cmax10);
+
+  drive_ui::begin();
+  drive_ui::setScheme((theme::Scheme)v.scheme, false);
 
   gmeter_ui::create();
   gmeter::begin((gmeter::Mount)v.mount, v.gflip != 0);
@@ -220,6 +232,7 @@ void setMode(Mode m, bool persist, const char *source, Anim anim) {
   g_oilOpa = 255;      // oil starts fully opaque
   g_oilPressOpa = 255; // oil press starts fully opaque
   g_coolantOpa = 255;  // coolant starts fully opaque
+  g_driveOpa = 255;    // drive starts fully opaque
   g_startMs = millis();
   g_lastStepMs = g_startMs - kStepMs;  // first step immediately
   g_moving = true;
@@ -234,6 +247,7 @@ void setMode(Mode m, bool persist, const char *source, Anim anim) {
   oil_ui::setVisible(g_prevMode == Mode::Oil || g_mode == Mode::Oil);
   oil_press_ui::setVisible(g_prevMode == Mode::OilPress || g_mode == Mode::OilPress);
   coolant_ui::setVisible(g_prevMode == Mode::Coolant || g_mode == Mode::Coolant);
+  drive_ui::setVisible(g_prevMode == Mode::Drive || g_mode == Mode::Drive);
 
   // Reset slides only for the leaving and joining screens. The other faces
   // stay hidden and stationary (at position 0), so they won't cause invalidation
@@ -243,6 +257,7 @@ void setMode(Mode m, bool persist, const char *source, Anim anim) {
   oil_ui::setSlide(0);
   oil_press_ui::setSlide(0);
   coolant_ui::setSlide(0);
+  drive_ui::setSlide(0);
 
   if (anim == Anim::Slide) {
     // A slide never fades: the faces are opaque and pass each other.
@@ -251,6 +266,7 @@ void setMode(Mode m, bool persist, const char *source, Anim anim) {
     g_oilOpa = 255;
     g_oilPressOpa = 255;
     g_coolantOpa = 255;
+    g_driveOpa = 255;
     applyOpacity();
   }
 
@@ -273,6 +289,8 @@ void toggleMode(const char *source) {
     setMode(Mode::Coolant, true, source, Anim::Fade);
   } else if (g_mode == Mode::Coolant) {
     setMode(Mode::GMeter, true, source, Anim::Fade);
+  } else if (g_mode == Mode::GMeter) {
+    setMode(Mode::Drive, true, source, Anim::Fade);
   } else {
     setMode(Mode::Gauge, true, source, Anim::Fade);
   }
@@ -287,6 +305,7 @@ void nextScheme() {
   oil_ui::setScheme(theme::scheme(), false);
   oil_press_ui::setScheme(theme::scheme(), false);
   coolant_ui::setScheme(theme::scheme(), false);
+  drive_ui::setScheme(theme::scheme(), false);
   gmeter_ui::applyScheme();
   Serial.printf("[ui] accent %s\n", theme::schemeName());
 }
@@ -296,6 +315,7 @@ void setScheme(theme::Scheme s, bool persist) {
   oil_ui::setScheme(s, persist);
   oil_press_ui::setScheme(s, persist);
   coolant_ui::setScheme(s, persist);
+  drive_ui::setScheme(s, persist);
   gmeter_ui::applyScheme();
 }
 
@@ -352,6 +372,9 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   const bool gaugeLive =
       (g_mode == Mode::Gauge || g_mode == Mode::Oil || g_mode == Mode::OilPress || g_mode == Mode::Coolant) ||
       (g_moving && g_anim == Anim::Fade);
+  const bool driveLive =
+      (g_mode == Mode::Drive) ||
+      (g_moving && g_anim == Anim::Fade);
   if (!splash::active()) {
     if (g_mode == Mode::Gauge && (gaugeLive || g_gaugeOpa > 0))
       gauge_ui::update(t, s);
@@ -361,6 +384,8 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
       oil_press_ui::update(t, s);
     if (g_mode == Mode::Coolant && (gaugeLive || g_coolantOpa > 0))
       coolant_ui::update(t, s);
+    if (g_mode == Mode::Drive && (driveLive || g_driveOpa > 0))
+      drive_ui::update(t, s);
   }
 }
 
@@ -432,6 +457,7 @@ void poll() {
     oil_ui::setSlide(0);
     oil_press_ui::setSlide(0);
     coolant_ui::setSlide(0);
+    drive_ui::setSlide(0);
     // Remember the current screen as the "leaving" screen for the next transition
     g_prevMode = g_mode;
     setVisible();
@@ -451,7 +477,7 @@ void poll() {
     applySlide(p);
   } else {
     p = p * p * (3.0f - 2.0f * p);
-    // Fade only gauge <-> gmeter; oil stays fully opaque during cross-fades
+    // Fade only gauge <-> gmeter; oil/oilpress/coolant/drive stay fully opaque during cross-fades
     if (g_mode == Mode::Gauge || g_mode == Mode::GMeter) {
       const uint8_t toGaugeOpa = g_mode == Mode::Gauge ? 255 : 0;
       const uint8_t toGmOpa = g_mode == Mode::GMeter ? 255 : 0;
@@ -461,9 +487,12 @@ void poll() {
       g_gaugeOpa = gaugeOpa;
       g_gmOpa = gmOpa;
       applyOpacity();
-    } else if (g_mode == Mode::Oil) {
-      // Oil is always visible during a fade - just make sure opacity stays 255
+    } else {
+      // Oil, OilPress, Coolant, Drive are always visible during a fade
       g_oilOpa = 255;
+      g_oilPressOpa = 255;
+      g_coolantOpa = 255;
+      g_driveOpa = 255;
       applyOpacity();
     }
   }

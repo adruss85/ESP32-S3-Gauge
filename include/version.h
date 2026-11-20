@@ -3,9 +3,16 @@
 // The version string is the changelog. Bump it for built changes, not for
 // docs-only commits.
 //
+// 0.6.3 - Drive screen (drivetrain visualisation): RPM, wheel speeds + slip
+// %, Haldex target/actual, ABS/TC chips. Wheel slip from OHX_STATUS slip[4].
+// Oil pressure now in PSI (was bar): Cluster_2 (0x420) byte 4 converted at
+// 14.5038x. Oil pressure scale default 58..290 PSI (approx 4..20 bar). Six-mode
+// cycle: Gauge -> Oil -> OilPress -> Coolant -> G-meter -> Drive -> Gauge.
+// Fixed oil temperature mapping bug (variable shadowing in CANN Cluster_2
+// byte 3 decode). Build sizes: flash 1,462,887 B (22.3%), RAM 119,000 B (36.3%).
 // 0.6.2 - Coolant and oil-pressure pages: a fifth and sixth face around
 // the same 270° arc and value row as the boost gauge. Coolant from
-// Engine_1 (0x280) byte 1 (1 °C/count, -40 °C offset; 0xFF absent -> "--
+// Engine_1 (0x280) byte 1 (1 °C/count, -40 °C offset; 0xFF absent -> "--"
 // °C"). Oil pressure from Cluster_2 (0x420) byte 4 (0.1 bar/count; 0xFF
 // absent -> "-- bar"). Five-mode cycle now Gauge -> Oil -> OilPress ->
 // Coolant -> G-meter -> Gauge. Coolant scale (40..120 °C default, min span
@@ -57,4 +64,4 @@
 //         baseline, and the link lamp is gone.
 // 0.2.0 - First gauge build: 270-degree boost arc and IAT readout.
 // 0.1.0 - Headless CANN listener.
-#define OHX_GAUGE_VERSION "0.6.2"
+#define OHX_GAUGE_VERSION "0.6.3"

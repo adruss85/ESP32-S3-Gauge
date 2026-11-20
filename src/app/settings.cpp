@@ -59,7 +59,7 @@ constexpr uint8_t kOldToNewMode[kOldModeCount] = {
     4,  // old 1 (g-meter)-> new 4 (g-meter)
 };
 
-Values g_values = {0, 0, 250, 0, 0, 0, 400, 1200, 40, 1200, 4, 20};
+Values g_values = {0, 0, 250, 0, 0, 0, 400, 1200, 580, 1200, 58, 290};
 
 Preferences g_prefs;
 bool g_open = false;
@@ -90,12 +90,12 @@ bool validOilScale(int16_t min10, int16_t max10) {
   return span >= kOilSpanMin10;
 }
 
-// Oil pressure scale validator: realistic band (0..100 bar in tenths).
-// Six readable labels need at least 1 bar span.
+// Oil pressure scale validator: realistic band (0..1500 PSI in tenths).
+// Six readable labels need at least 1 PSI span (10 tenths).
 bool validOilPressScale(int16_t min10, int16_t max10) {
-  constexpr int16_t kOilPressMin10 = 0;     // 0.0 bar
-  constexpr int16_t kOilPressMax10 = 1000;  // 100.0 bar
-  constexpr int16_t kOilPressSpanMin10 = 10; //   1.0 bar
+  constexpr int16_t kOilPressMin10 = 0;      // 0.0 PSI
+  constexpr int16_t kOilPressMax10 = 15000;  // 1500.0 PSI
+  constexpr int16_t kOilPressSpanMin10 = 10; //   1.0 PSI
   if (min10 < kOilPressMin10 || max10 > kOilPressMax10) return false;
   if (min10 >= max10) return false;
   const int16_t span = (int16_t)(max10 - min10);
@@ -127,7 +127,7 @@ void store(const char *key, int32_t value) {
 
 void begin() {
   if (!openPrefs()) {
-    g_values = Values{0, 0, 250, 0, 0, 0, 400, 1200};
+    g_values = Values{0, 0, 250, 0, 0, 0, 400, 1200, 580, 2900, 40, 1200};
     return;
   }
 
@@ -213,16 +213,16 @@ void begin() {
   if (mount >= 0 && mount <= 2) g_values.mount = (uint8_t)mount;
   if (flip >= 0 && flip <= 1) g_values.gflip = (uint8_t)flip;
 
-  const int32_t omin10p = g_prefs.getInt(kKeyOilPressMin, 40);
-  const int32_t omax10p = g_prefs.getInt(kKeyOilPressMax, 200);
+  const int32_t omin10p = g_prefs.getInt(kKeyOilPressMin, 580);
+  const int32_t omax10p = g_prefs.getInt(kKeyOilPressMax, 2900);
   const int32_t cmin10 = g_prefs.getInt(kKeyCoolantMin, 400);
   const int32_t cmax10 = g_prefs.getInt(kKeyCoolantMax, 1200);
 
   if (validOilPressScale((int16_t)omin10p, (int16_t)omax10p)) {
     g_values.omin10p = (int16_t)omin10p;
     g_values.omax10p = (int16_t)omax10p;
-  } else if (omin10p != 40 || omax10p != 200) {
-    Serial.printf("[set] stored oil press scale %ld..%ld rejected; using 4..20\n",
+  } else if (omin10p != 580 || omax10p != 2900) {
+    Serial.printf("[set] stored oil press scale %ld..%ld rejected; using 58..290\n",
                   (long)omin10p, (long)omax10p);
   }
   if (validCoolantScale((int16_t)cmin10, (int16_t)cmax10)) {
@@ -247,7 +247,7 @@ void begin() {
                                               : "gauge";
   Serial.printf("[set] mode %s, mount %s, flip %u\n", modeName, mountName,
                 (unsigned)g_values.gflip);
-  Serial.printf("[set] oil press scale %.1f..%.1f bar\n",
+  Serial.printf("[set] oil press scale %.1f..%.1f PSI\n",
                 (double)g_values.omin10p / 10.0,
                 (double)g_values.omax10p / 10.0);
   Serial.printf("[set] coolant scale %.1f..%.1f °C\n",

@@ -109,7 +109,7 @@ volatile uint32_t g_lastCoolantMs = 0;
 volatile float g_coolantC = NAN;
 
 volatile uint32_t g_lastOilPressMs = 0;
-volatile float g_oilPressBar = NAN;
+volatile float g_oilPressPsi = NAN;
 volatile bool g_schemeEvent = false;
 volatile bool g_modeEvent = false;
 bool g_cruiseCombo = false;
@@ -220,6 +220,18 @@ void handleStatus(const esp_now_recv_info_t *info, const uint8_t *data, int len)
   memcpy(t.name, st.name, sizeof(st.name));
   t.name[sizeof(t.name) - 1] = '\0';
 
+  // Wheel slip: FL, FR, RL, RR (%). OHX_NONE8 (-128) = no value.
+  bool anySlip = false;
+  for (int i = 0; i < 4; i++) {
+    t.slip[i] = st.slip[i];
+    if (st.slip[i] != OHX_NONE8) anySlip = true;
+  }
+  t.slipValid = anySlip;
+
+  // Haldex lock actual
+  t.lockActualValid = (st.lockActual != OHX_NONE8);
+  t.lockActual = t.lockActualValid ? st.lockActual : 0;
+
   taskENTER_CRITICAL(&g_mux);
   noteSender(info->src_addr);
   g_tel = t;
@@ -328,9 +340,9 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     }
 
     // Cluster_2 (0x420): byte 4 is OilPressure_4_1, 0.1 bar/count.
-    // 0xFF means no value.
+    // 0xFF means no value. Convert to PSI (1 bar = 14.5038 PSI).
     if (id == 0x420 && frameLen >= 5 && data[off + 4] != 0xFF) {
-      oilPress = (float)data[off + 4] * 0.1f;
+      oilPress = (float)data[off + 4] * 0.1f * 14.5038f;
       haveOilPress = true;
     }
 
@@ -349,8 +361,6 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 
     // Cluster_2 (0x420) byte 3: OilTemperature_4_1, 1 C/count with -60 C
     // offset. 0xFF means no value.
-    bool haveOilTemp = false;
-    float oilTemp = NAN;
     if (id == 0x420 && frameLen >= 4 && data[off + 3] != 0xFF) {
       oilTemp = (float)data[off + 3] - 60.0f;
       haveOilTemp = true;
@@ -408,8 +418,12 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     g_lastCoolantMs = now;
   }
   if (haveOilPress) {
-    g_oilPressBar = oilPress;
+    g_oilPressPsi = oilPress;
     g_lastOilPressMs = now;
+  }
+  if (haveOilTemp) {
+    g_oilC = oilTemp;
+    g_lastOilMs = now;
   }
   if (haveDimmer) g_term58s = dimmer;
   if (haveCruise) {
@@ -858,6 +872,8 @@ Telemetry telemetry() {
   t = g_tel;
   if (!g_lastStatusMs || (uint32_t)(now - g_lastStatusMs) > kStatusFreshMs) {
     t.statusValid = false;
+    t.slipValid = false;
+    t.lockActualValid = false;
   }
   t.iatValid = g_lastIatMs && (uint32_t)(now - g_lastIatMs) <= kIatFreshMs;
   t.iatC = t.iatValid ? (float)g_iatC : NAN;
@@ -866,7 +882,7 @@ Telemetry telemetry() {
   t.oilTempValid = g_lastOilMs && (uint32_t)(now - g_lastOilMs) <= kIatFreshMs;
   t.oilTempC = t.oilTempValid ? (float)g_oilC : NAN;
   t.oilPressValid = g_lastOilPressMs && (uint32_t)(now - g_lastOilPressMs) <= kIatFreshMs;
-  t.oilPressBar = t.oilPressValid ? (float)g_oilPressBar : NAN;
+  t.oilPressPsi = t.oilPressValid ? (float)g_oilPressPsi : NAN;
   t.term58s = g_term58s;
   taskEXIT_CRITICAL(&g_mux);
   return t;

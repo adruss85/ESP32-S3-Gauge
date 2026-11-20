@@ -18,9 +18,10 @@ namespace dashboard {
 enum class Mode : uint8_t {
   Gauge = 0,      // boost psi face (270 deg arc, BOOST PSI)
   Oil = 1,        // engine oil temp face (270 deg arc, OIL °C)
-  OilPress = 2,   // oil pressure face (270 deg arc, OIL PRESSURE bar)
+  OilPress = 2,   // oil pressure face (270 deg arc, OIL PRESSURE PSI)
   Coolant = 3,    // coolant temp face (270 deg arc, COOLANT °C)
   GMeter = 4,     // accelerometer dot + tail + readout
+  Drive = 5,      // drivetrain viz: wheel speeds, slip, Haldex, ABS/TC
 };
 
 // Which transition draws a mode change. A key or web change cross-fades; a

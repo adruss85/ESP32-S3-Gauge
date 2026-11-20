@@ -24,8 +24,8 @@ struct Values {
   uint8_t gflip;    // 1 = invert the accel/brake direction
   int16_t omin10;   // oil temperature scale minimum, tenths of a degree C
   int16_t omax10;   // oil temperature scale maximum, tenths of a degree C
-  int16_t omin10p;  // oil pressure scale minimum, tenths of a bar
-  int16_t omax10p;  // oil pressure scale maximum, tenths of a bar
+  int16_t omin10p;  // oil pressure scale minimum, tenths of a PSI
+  int16_t omax10p;  // oil pressure scale maximum, tenths of a PSI
   int16_t cmin10;   // coolant scale minimum, tenths of a degree C
   int16_t cmax10;   // coolant scale maximum, tenths of a degree C
 };
@@ -70,15 +70,15 @@ inline constexpr int16_t kSpanMax10 = 600;    //  60.0 PSI
 // Oil temperature span minimums, tenths of a degree C.
 inline constexpr int16_t kOilSpanMin10 = 20;  //   2.0 °C
 
-// Oil pressure span minimums, tenths of a bar.
-inline constexpr int16_t kOilPressSpanMin10 = 10;  //   1.0 bar
+// Oil pressure span minimums, tenths of a PSI.
+inline constexpr int16_t kOilPressSpanMin10 = 10;  //   1.0 PSI
 
 // Coolant temperature span minimums, tenths of a degree C.
 inline constexpr int16_t kCoolantSpanMin10 = 100;  //  10.0 °C
 
-// Persist the oil pressure scale, in tenths of a bar. The accepted
+// Persist the oil pressure scale, in tenths of a PSI. The accepted
 // window is a realistic oil-pressure band; six readable labels need a
-// span of at least 1 bar.
+// span of at least 1 PSI.
 bool setOilPressScale(int16_t min10, int16_t max10);
 
 // Persist the coolant scale, in tenths of a degree C.
