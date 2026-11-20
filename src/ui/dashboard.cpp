@@ -1,21 +1,11 @@
 // =====================================================================
 // dashboard.cpp - mode ownership, IMU sampling, transitions and gestures
 //
-// Two things can change the screen: the BOOT key / cruise stalk / web page,
-// which cross-fade, and a horizontal swipe, which slides. Both end in the
-// same place; the difference is what the eye sees.
-//
-// Fade design: LVGL opacity on a container allocates a layer buffer sized to
-// the container. A 466x466 RGB565 layer is 434 KB, which cannot fit the
-// 128 KB pool, so each module scales the opacity of its own leaf objects
-// instead. At ~60 Hz the arc costs a few extra repaints for 260 ms; after
-// that the hidden root stops drawing entirely.
-//
-// Slide design: both roots translate instead of fading. The invalidated area
-// is already the whole glass during a transition (both screens are visible),
-// so moving costs no more than the fade and reads as a push. Each root's
-// offset is owned by its own module (setSlide), because the gauge's root and
-// the G-meter's canvas are different objects at different y origins.
+// Three screens on one LVGL display: boost gauge, oil temperature face,
+// and G-meter. The dashboard owns IMU sampling, mode setting and the short
+// cross-fade. It keeps G-meter math running even while other faces are
+// displayed, so switching screens shows a warm 1 s average rather than a
+// blank dot.
 // =====================================================================
 #include "ui/dashboard.h"
 
@@ -28,6 +18,7 @@
 #include "hal/touch.h"
 #include "ui/gauge_ui.h"
 #include "ui/gmeter_ui.h"
+#include "ui/oil_ui.h"
 #include "ui/splash.h"
 
 #ifndef GAUGE_CAPTURE_GMETER
@@ -52,9 +43,9 @@ uint32_t g_startMs = 0;
 uint32_t g_lastStepMs = 0;
 uint8_t g_gaugeOpa = 255;
 uint8_t g_gmOpa = 0;
+uint8_t g_oilOpa = 255;
 uint8_t g_fromGauge = 255;
 uint8_t g_fromGm = 0;
-
 uint32_t g_lastSampleMs = 0;
 uint32_t g_lastGoodMs = 0;
 bool g_imuOffline = false;
@@ -64,20 +55,16 @@ const char *mountName(gmeter::Mount m) {
   return m == gmeter::Mount::Flat ? "flat" : "upright";
 }
 
-void applyOpacity(uint8_t gaugeOpa, uint8_t gmOpa) {
-  g_gaugeOpa = gaugeOpa;
-  g_gmOpa = gmOpa;
-  gauge_ui::setOpacity(gaugeOpa);
-  gmeter_ui::setOpacity(gmOpa);
+void applyOpacity() {
+  gauge_ui::setOpacity(g_gaugeOpa);
+  gmeter_ui::setOpacity(g_gmOpa);
+  oil_ui::setOpacity(g_oilOpa);
 }
 
-void showOnly(Mode m) {
-  const bool g = m == Mode::Gauge;
-  gauge_ui::setVisible(g);
-  gmeter_ui::setVisible(!g);
-  gauge_ui::setSlide(0);
-  gmeter_ui::setSlide(0);
-  applyOpacity(g ? 255 : 0, g ? 0 : 255);
+void setVisible() {
+  gauge_ui::setVisible(g_mode == Mode::Gauge || g_mode == Mode::Oil);
+  gmeter_ui::setVisible(g_mode == Mode::GMeter);
+  oil_ui::setVisible(g_mode == Mode::Oil);
 }
 
 // Offset of a screen part-way through a slide. `from` is where it started,
@@ -91,6 +78,8 @@ int slideOffset(int from, int to, float p) {
 void applySlide(float p) {
   const int w = LCD_H_RES;
   const bool toGauge = g_mode == Mode::Gauge;
+  const bool toOil = g_mode == Mode::Oil;
+  const bool toGMeter = g_mode == Mode::GMeter;
 
   // The screen being left travels out one way; the screen arriving comes in
   // from the other side.
@@ -100,9 +89,15 @@ void applySlide(float p) {
   if (toGauge) {
     gauge_ui::setSlide(slideOffset(inFrom, 0, p));
     gmeter_ui::setSlide(slideOffset(0, outTo, p));
-  } else {
+    oil_ui::setSlide(slideOffset(0, outTo, p));
+  } else if (toOil) {
+    oil_ui::setSlide(slideOffset(inFrom, 0, p));
     gauge_ui::setSlide(slideOffset(0, outTo, p));
+    gmeter_ui::setSlide(slideOffset(0, outTo, p));
+  } else {  // toGMeter
     gmeter_ui::setSlide(slideOffset(inFrom, 0, p));
+    gauge_ui::setSlide(slideOffset(0, outTo, p));
+    oil_ui::setSlide(slideOffset(0, outTo, p));
   }
 }
 
@@ -124,8 +119,22 @@ void onGesture(touch::Gesture g) {
 
   g_slideDir = (g == touch::Gesture::SwipeLeft) ? 1 : -1;
   Serial.printf("[ui] touch swipe %s\n", g_slideDir > 0 ? "left" : "right");
-  setMode(g_mode == Mode::Gauge ? Mode::GMeter : Mode::Gauge, true, "swipe",
-          Anim::Slide);
+
+  // Swipe order: boost -> oil -> G-meter -> boost. SwipeLeft advances,
+  // SwipeRight goes back.
+  if (g_mode == Mode::Gauge && g_slideDir > 0) {
+    setMode(Mode::Oil, true, "swipe", Anim::Slide);
+  } else if (g_mode == Mode::Oil && g_slideDir > 0) {
+    setMode(Mode::GMeter, true, "swipe", Anim::Slide);
+  } else if (g_mode == Mode::GMeter && g_slideDir > 0) {
+    setMode(Mode::Gauge, true, "swipe", Anim::Slide);
+  } else if (g_mode == Mode::Gauge && g_slideDir < 0) {
+    setMode(Mode::GMeter, true, "swipe", Anim::Slide);
+  } else if (g_mode == Mode::Oil && g_slideDir < 0) {
+    setMode(Mode::Gauge, true, "swipe", Anim::Slide);
+  } else if (g_mode == Mode::GMeter && g_slideDir < 0) {
+    setMode(Mode::Oil, true, "swipe", Anim::Slide);
+  }
 }
 
 }  // namespace
@@ -138,12 +147,16 @@ void begin() {
   gauge_ui::setScheme((theme::Scheme)v.scheme);
   gauge_ui::applyScale(v.min10, v.max10);
 
+  oil_ui::begin();
+  oil_ui::setScheme((theme::Scheme)v.scheme);
+  applyOilScale(v.omin10, v.omax10);
+
   gmeter_ui::create();
   gmeter::begin((gmeter::Mount)v.mount, v.gflip != 0);
   g_lastMount = gmeter::mount();
   gmeter_ui::applyScheme();
 
-  showOnly(g_mode);
+  setVisible();
   g_lastSampleMs = millis();
   g_lastGoodMs = millis();
 
@@ -153,7 +166,9 @@ void begin() {
                              : v.mount == 1 ? "flat"
                                             : "upright";
   Serial.printf("[ui] mode %s, mount %s, flip %u\n",
-                g_mode == Mode::GMeter ? "g-meter" : "gauge", mountSetting,
+                g_mode == Mode::GMeter ? "g-meter"
+                : g_mode == Mode::Oil ? "oil"
+                                     : "gauge", mountSetting,
                 (unsigned)v.gflip);
 }
 
@@ -169,32 +184,45 @@ void setMode(Mode m, bool persist, const char *source, Anim anim) {
   // press reverses smoothly instead of jumping back to full opacity.
   g_fromGauge = g_gaugeOpa;
   g_fromGm = g_gmOpa;
+  g_oilOpa = 255;  // oil starts fully opaque
   g_startMs = millis();
   g_lastStepMs = g_startMs - kStepMs;  // first step immediately
   g_moving = true;
   g_anim = anim;
   g_mode = m;
 
-  // Both roots must draw during the transition.
+  // All three roots must draw during the transition.
   gauge_ui::setVisible(true);
   gmeter_ui::setVisible(true);
+  oil_ui::setVisible(true);
   gauge_ui::setSlide(0);
   gmeter_ui::setSlide(0);
+  oil_ui::setSlide(0);
 
   if (anim == Anim::Slide) {
-    // A slide never fades: the two screens are opaque and pass each other.
-    applyOpacity(255, 255);
+    // A slide never fades: the three screens are opaque and pass each other.
+    g_gaugeOpa = 255;
+    g_gmOpa = 255;
+    g_oilOpa = 255;
+    applyOpacity();
   }
 
   if (persist) settings::setMode((uint8_t)m);
   Serial.printf("[ui] mode %s (%s, %s)\n",
-                m == Mode::GMeter ? "g-meter" : "gauge", source,
+                g_mode == Mode::GMeter ? "g-meter"
+                : g_mode == Mode::Oil ? "oil"
+                                      : "gauge", source,
                 anim == Anim::Slide ? "slide" : "fade");
 }
 
 void toggleMode(const char *source) {
-  setMode(g_mode == Mode::Gauge ? Mode::GMeter : Mode::Gauge, true, source,
-          Anim::Fade);
+  if (g_mode == Mode::Gauge) {
+    setMode(Mode::Oil, true, source, Anim::Fade);
+  } else if (g_mode == Mode::Oil) {
+    setMode(Mode::GMeter, true, source, Anim::Fade);
+  } else {
+    setMode(Mode::Gauge, true, source, Anim::Fade);
+  }
 }
 
 bool moving() { return g_moving; }
@@ -203,17 +231,29 @@ void nextScheme() {
   theme::nextScheme();
   settings::setScheme((uint8_t)theme::scheme());
   gauge_ui::setScheme(theme::scheme(), false);
+  oil_ui::setScheme(theme::scheme(), false);
   gmeter_ui::applyScheme();
   Serial.printf("[ui] accent %s\n", theme::schemeName());
 }
 
 void setScheme(theme::Scheme s, bool persist) {
   gauge_ui::setScheme(s, persist);
+  oil_ui::setScheme(s, persist);
   gmeter_ui::applyScheme();
 }
 
 bool applyScale(int16_t min10, int16_t max10) {
-  return gauge_ui::applyScale(min10, max10);
+  bool ok = gauge_ui::applyScale(min10, max10);
+  // The boost scale is PSI-based; the oil face owns its own °C range and
+  // must not inherit the boost scale (the units differ and so does the
+  // meaning of min/max).
+  return ok;
+}
+
+bool applyOilScale(int16_t min10, int16_t max10) {
+  const bool ok = oil_ui::applyScale(min10, max10);
+  if (ok) settings::setOilScale(min10, max10);
+  return ok;
 }
 
 void setMount(gmeter::Mount m, bool flip, bool persist) {
@@ -236,13 +276,19 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   // gravity tracker. When it is absent the IMU still test is the fallback.
   gmeter::setVehicleSpeed(t.speed, t.statusValid && !isnan(t.speed));
 
-  // During a fade to the G-meter the gauge is still partly visible, so it
-  // keeps receiving data until its opacity reaches zero. A slide does not
-  // need that: the gauge is opaque and leaving, so redrawing its arc would
-  // only add work. While the splash covers the glass there is no point
-  // drawing either screen underneath it.
-  const bool gaugeLive = g_mode == Mode::Gauge || (g_moving && g_anim == Anim::Fade);
-  if (gaugeLive && !splash::active()) gauge_ui::update(t, s);
+  // During a fade to another screen the gauge/oil face is still partly
+  // visible, so it keeps receiving data until its opacity reaches zero.
+  // While the splash covers the glass there is no point drawing either screen
+  // underneath it.
+  const bool gaugeLive =
+      (g_mode == Mode::Gauge || g_mode == Mode::Oil) ||
+      (g_moving && g_anim == Anim::Fade);
+  if (!splash::active()) {
+    if (g_mode == Mode::Gauge && (gaugeLive || g_gaugeOpa > 0))
+      gauge_ui::update(t, s);
+    if (g_mode == Mode::Oil && (gaugeLive || g_oilOpa > 0))
+      oil_ui::update(t, s);
+  }
 }
 
 void poll() {
@@ -307,7 +353,7 @@ void poll() {
   if (t >= duration) {
     g_moving = false;
     g_anim = Anim::Fade;
-    showOnly(g_mode);
+    setVisible();
     return;
   }
 
@@ -324,13 +370,21 @@ void poll() {
     applySlide(p);
   } else {
     p = p * p * (3.0f - 2.0f * p);
-    const bool toGauge = g_mode == Mode::Gauge;
-    const uint8_t toGaugeOpa = toGauge ? 255 : 0;
-    const uint8_t toGmOpa = toGauge ? 0 : 255;
-    const int gaugeOpa =
-        (int)g_fromGauge + (int)(((int)toGaugeOpa - (int)g_fromGauge) * p);
-    const int gmOpa = (int)g_fromGm + (int)(((int)toGmOpa - (int)g_fromGm) * p);
-    applyOpacity((uint8_t)gaugeOpa, (uint8_t)gmOpa);
+    // Fade only gauge <-> gmeter; oil stays fully opaque during cross-fades
+    if (g_mode == Mode::Gauge || g_mode == Mode::GMeter) {
+      const uint8_t toGaugeOpa = g_mode == Mode::Gauge ? 255 : 0;
+      const uint8_t toGmOpa = g_mode == Mode::GMeter ? 255 : 0;
+      const int gaugeOpa =
+          (int)g_fromGauge + (int)(((int)toGaugeOpa - (int)g_fromGauge) * p);
+      const int gmOpa = (int)g_fromGm + (int)(((int)toGmOpa - (int)g_fromGm) * p);
+      g_gaugeOpa = gaugeOpa;
+      g_gmOpa = gmOpa;
+      applyOpacity();
+    } else if (g_mode == Mode::Oil) {
+      // Oil is always visible during a fade - just make sure opacity stays 255
+      g_oilOpa = 255;
+      applyOpacity();
+    }
   }
 }
 

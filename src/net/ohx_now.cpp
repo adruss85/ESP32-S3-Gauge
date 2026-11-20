@@ -102,6 +102,8 @@ volatile uint32_t g_lastCanMs = 0;
 volatile uint32_t g_lastIatMs = 0;
 volatile float g_iatC = NAN;
 volatile int g_term58s = -1;  // Terminal 58s, 0..99; -1 = not heard
+volatile uint32_t g_lastOilMs = 0;
+volatile float g_oilC = NAN;
 volatile bool g_schemeEvent = false;
 volatile bool g_modeEvent = false;
 bool g_cruiseCombo = false;
@@ -265,6 +267,8 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 
   bool haveIat = false;
   float iat = NAN;
+  bool haveOilTemp = false;
+  float oilTemp = NAN;
   bool haveDimmer = false;
   int dimmer = 0;
   bool haveCruise = false;
@@ -319,6 +323,15 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
       }
     }
 
+    // Cluster_2 (0x420) byte 3: OilTemperature_4_1, 1 C/count with -60 C
+    // offset. 0xFF means no value.
+    bool haveOilTemp = false;
+    float oilTemp = NAN;
+    if (id == 0x420 && frameLen >= 4 && data[off + 3] != 0xFF) {
+      oilTemp = (float)data[off + 3] - 60.0f;
+      haveOilTemp = true;
+    }
+
     // GRA_New (0x38A, PQ cruise stalk): byte 1 bit 1 is GRA_Cancel, bit 2
     // is GRA_Down_Short and bit 4 is GRA_Down_Long. The column can set Cancel
     // and Down together; treat either down bit as the switch.
@@ -365,6 +378,10 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (haveIat) {
     g_iatC = iat;
     g_lastIatMs = now;
+  }
+  if (haveOilTemp) {
+    g_oilC = oilTemp;
+    g_lastOilMs = now;
   }
   if (haveDimmer) g_term58s = dimmer;
   if (haveCruise) {
@@ -816,6 +833,8 @@ Telemetry telemetry() {
   }
   t.iatValid = g_lastIatMs && (uint32_t)(now - g_lastIatMs) <= kIatFreshMs;
   t.iatC = t.iatValid ? (float)g_iatC : NAN;
+  t.oilTempValid = g_lastOilMs && (uint32_t)(now - g_lastOilMs) <= kIatFreshMs;
+  t.oilTempC = t.oilTempValid ? (float)g_oilC : NAN;
   t.term58s = g_term58s;
   taskEXIT_CRITICAL(&g_mux);
   return t;

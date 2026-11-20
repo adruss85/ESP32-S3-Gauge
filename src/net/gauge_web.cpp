@@ -108,11 +108,18 @@ input[type=file]{font-size:13px;color:#b9c4d0;max-width:100%}
 <button>Apply</button></form>
 <p class=sub id=scalemsg></p></div>
 
+<div class=card><form id=os class=row>
+<label>Min <input id=omin type=number step=.1 required> °C</label>
+<label>Max <input id=omax type=number step=.1 required> °C</label>
+<button>Apply</button></form>
+<p class=sub id=ocmmsg></p></div>
+
 <h2>Display</h2>
 <div class=card>
 <div class=row>
 <label><input type=radio name=mode value=0> Boost gauge</label>
-<label><input type=radio name=mode value=1> G-meter</label>
+<label><input type=radio name=mode value=1> Oil temp</label>
+<label><input type=radio name=mode value=2> G-meter</label>
 </div>
 <div class=row style="margin-top:10px">
 <label>Mount <select id=mount>
@@ -192,6 +199,8 @@ async function tick(){
     });
     if(document.activeElement!==$("min"))$("min").value=(s.min10/10).toFixed(1);
     if(document.activeElement!==$("max"))$("max").value=(s.max10/10).toFixed(1);
+    if(document.activeElement!==$("omin"))$("omin").value=(s.omin10/10).toFixed(1);
+    if(document.activeElement!==$("omax"))$("omax").value=(s.omax10/10).toFixed(1);
     document.querySelectorAll("input[name=mode]").forEach(function(r){
       r.checked=+r.value===s.mode;
     });
@@ -200,7 +209,8 @@ async function tick(){
     $("live").textContent=
       "boost   "+val(s.boost10)+" psi"+(s.boost10===null?"  (no OHX_STATUS)":"")+
       "\nIAT     "+val(s.iat10)+" \u00b0C"+(s.iat10===null?"  (no Engine_3)":"")+
-      "\nOil    "+val(oil)+" \u00b0C"+(s.iat10===null?"  (no Engine_3)":"")+
+      "\nOil    "+val(s.oil10)+" \u00b0C"+(s.oil10===null?"  (no Cluster_2)":"")+
+      "\nOil scale "+(s.omin10/10).toFixed(1)+".."+(s.omax10/10).toFixed(1)+" \u00b0C"+
       "\ng avg   "+valg(s.g100)+" g"+(s.g100===null?"  (no IMU)":"")+
       "\nG long  "+valg(s.gv100)+" g \u00b7 lat "+valg(s.gl100)+" g"+
       "\nOHX     "+s.ohx+" packets \u00b7 CANN "+s.cann+" packets"+
@@ -282,16 +292,68 @@ void handleStatus() {
            "{\"fw\":\"%s\",\"scheme\":%u,\"min10\":%d,\"max10\":%d,"
            "\"mode\":%u,\"mount\":%u,\"mres\":%u,\"flip\":%u,"
            "\"boost10\":%s,\"iat10\":%s,\"oil10\":%s,\"g100\":%s,\"gv100\":%s,\"gl100\":%s,"
+           "\"omin10\":%d,\"omax10\":%d,"
            "\"ch\":%u,\"rssi\":%d,"
            "\"pps\":%.1f,\"ohx\":%lu,\"cann\":%lu,\"clients\":%u,"
            "\"heap\":%lu}",
            config::kVersion, (unsigned)v.scheme, (int)v.min10, (int)v.max10,
            (unsigned)v.mode, (unsigned)v.mount, (unsigned)gmeter::mount(),
            (unsigned)v.gflip, boost, iat, oil, gavg, gvert, glat,
+           (int)v.omin10, (int)v.omax10,
            (unsigned)s.channel, (int)s.rssi, (double)g_pps,
            (unsigned long)s.statusPackets, (unsigned long)s.canPackets,
            (unsigned)WiFi.softAPgetStationNum(),
            (unsigned long)ESP.getFreeHeap());
+  sendJson(200, buf);
+}
+
+void handleOilScale() {
+  if (!g_server.hasArg("min") || !g_server.hasArg("max")) {
+    reject("missing min or max");
+    return;
+  }
+
+  const String mn = g_server.arg("min");
+  const String mx = g_server.arg("max");
+  char *end = nullptr;
+  const float fmin = strtof(mn.c_str(), &end);
+  if (end == mn.c_str() || *end != '\0') {
+    reject("min is not a number");
+    return;
+  }
+  const float fmax = strtof(mx.c_str(), &end);
+  if (end == mx.c_str() || *end != '\0') {
+    reject("max is not a number");
+    return;
+  }
+  if (!isfinite(fmin) || !isfinite(fmax)) {
+    reject("scale is not finite");
+    return;
+  }
+
+  const int32_t min10 = lroundf(fmin * 10.0f);
+  const int32_t max10 = lroundf(fmax * 10.0f);
+  // Oil temperature scale: realistic engine-oil band, tenths of a degree C.
+  // Accept -60..200 (the offset band plus headroom); the display layer
+  // validates the span itself.
+  if (min10 < -600 || min10 > 2000 || max10 < -600 || max10 > 2000) {
+    reject("oil scale outside -60.0 .. 200.0 °C");
+    return;
+  }
+  if (!settings::setOilScale((int16_t)min10, (int16_t)max10)) {
+    reject("min must be below max and the span at least 2.0 °C");
+    return;
+  }
+
+#if GAUGE_HAS_DISPLAY
+  dashboard::applyOilScale((int16_t)min10, (int16_t)max10);
+#endif
+  Serial.printf("[ui] oil scale %.1f..%.1f °C (web)\n", (double)min10 / 10.0,
+                (double)max10 / 10.0);
+
+  char buf[96];
+  snprintf(buf, sizeof(buf), "{\"ok\":true,\"min10\":%ld,\"max10\":%ld}",
+           (long)min10, (long)max10);
   sendJson(200, buf);
 }
 
@@ -374,8 +436,8 @@ void handleMode() {
     return;
   }
   const String arg = g_server.arg("m");
-  if (arg.length() != 1 || arg[0] < '0' || arg[0] > '1') {
-    reject("mode must be 0 or 1");
+  if (arg.length() != 1 || arg[0] < '0' || arg[0] > '2') {
+    reject("mode must be 0, 1 or 2");
     return;
   }
   dashboard::setMode((dashboard::Mode)(arg[0] - '0'), true, "web");
@@ -477,6 +539,7 @@ void startServer() {
   g_server.on("/mode", HTTP_POST, handleMode);
   g_server.on("/gmount", HTTP_POST, handleGMount);
   g_server.on("/gzero", HTTP_POST, handleGZero);
+  g_server.on("/oscale", HTTP_POST, handleOilScale);
   g_server.on("/update", HTTP_POST, handleOtaDone, handleOtaUpload);
   g_server.on("/favicon.ico", HTTP_GET, []() { g_server.send(204, "text/plain", ""); });
   g_server.onNotFound([]() { g_server.send(404, "text/plain", "not found"); });

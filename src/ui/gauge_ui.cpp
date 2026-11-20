@@ -59,8 +59,6 @@ lv_obj_t *g_unit = nullptr;
 lv_obj_t *g_rule = nullptr;
 lv_obj_t *g_iat = nullptr;
 lv_obj_t *g_iatCap = nullptr;
-lv_obj_t *g_oil = nullptr;
-lv_obj_t *g_oilCap = nullptr;
 lv_obj_t *g_status = nullptr;
 lv_obj_t *g_ticks[6] = {};
 uint8_t g_masterOpa = 255;
@@ -126,7 +124,6 @@ void applyScheme() {
   lv_obj_set_style_arc_color(g_arc, theme::track(), LV_PART_MAIN);
   lv_obj_set_style_text_color(g_unit, accent, 0);
   lv_obj_set_style_text_color(g_iatCap, theme::dim(), 0);
-  lv_obj_set_style_text_color(g_oilCap, theme::dim(), 0);
   for (lv_obj_t *tick : g_ticks) {
     if (tick != nullptr) lv_obj_set_style_text_color(tick, theme::dim(), 0);
   }
@@ -160,8 +157,6 @@ void applyOpacity() {
   lv_obj_set_style_text_opa(g_unit, g_masterOpa, 0);
   lv_obj_set_style_text_opa(g_iatCap, dim, 0);
   lv_obj_set_style_text_opa(g_iat, g_masterOpa, 0);
-  lv_obj_set_style_text_opa(g_oilCap, dim, 0);
-  lv_obj_set_style_text_opa(g_oil, g_masterOpa, 0);
   lv_obj_set_style_bg_opa(g_status, g_masterOpa, 0);
   lv_obj_set_style_bg_opa(g_rule, g_masterOpa, 0);
 }
@@ -296,19 +291,6 @@ void create() {
   lv_obj_set_style_text_color(g_iat, theme::fg(), 0);
   lv_obj_align(g_iat, LV_ALIGN_TOP_MID, 0, 313);
 
-  g_oilCap = lv_label_create(g_root);
-  lv_label_set_text(g_oilCap, "OIL");
-  lv_obj_set_style_text_font(g_oilCap, FONT_SMALL, 0);
-  lv_obj_set_style_text_color(g_oilCap, theme::dim(), 0);
-  lv_obj_set_style_text_opa(g_oilCap, LV_OPA_60, 0);
-  lv_obj_align(g_oilCap, LV_ALIGN_TOP_MID, 0, 343);
-
-  g_oil = lv_label_create(g_root);
-  lv_label_set_text(g_oil, "--");
-  lv_obj_set_style_text_font(g_oil, FONT_IAT, 0);
-  lv_obj_set_style_text_color(g_oil, theme::fg(), 0);
-  lv_obj_align(g_oil, LV_ALIGN_TOP_MID, 0, 371);
-
   // Link state as a small line at the bottom edge: a few pixels tall, wide
   // enough to read at a glance without becoming a lamp.
   g_status = lv_obj_create(g_root);
@@ -400,24 +382,6 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
       lv_label_set_text(g_iat, buf);
     } else {
       lv_label_set_text(g_iat, "--");
-    }
-  }
-
-  // Oil temperature from Cluster_2 (0x420) byte 3, the same frame the
-  // S3-dash draws as engine oil. 0xFF means no value, drawn as "--".
-  const bool oilOk = t.oilTempValid && !isnan(t.oilTempC);
-  const int oil = oilOk ? (int)lroundf(t.oilTempC) : 0;
-  static bool lastOilOk = false;
-  static int lastOil = 0;
-  if (oilOk != lastOilOk || (oilOk && oil != lastOil)) {
-    lastOilOk = oilOk;
-    lastOil = oil;
-    if (oilOk) {
-      char buf[16];
-      snprintf(buf, sizeof(buf), "%d°C", oil);
-      lv_label_set_text(g_oil, buf);
-    } else {
-      lv_label_set_text(g_oil, "--");
     }
   }
 

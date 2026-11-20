@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 20 Nov 2026, firmware **0.6.0**.
+Last updated: 20 Nov 2026, firmware **0.6.1**.
 
 > **Hardware state.** The gauge runs on a **Waveshare ESP32-S3-Touch-AMOLED-1.75**
 > (466x466 CO5300 AMOLED, CST9217 touch). The 1.85 unit this firmware was
@@ -120,6 +120,15 @@ Last updated: 20 Nov 2026, firmware **0.6.0**.
   **not** been checked against a dash dimmer.
 * The headless `esp32dev` configuration builds; its receiver path is
   unchanged from the earlier WROOM bench run.
+
+* **Oil temperature page (0.6.1).** The dedicated 270° oil arc face is wired
+  to the same decode and now has its own screen in the three-mode cycle
+  (boost → oil → G-meter → boost). The arc default scale is 40–120 °C, the
+  stored setting is editable from the web page via `/oscale` (min/max, 0.1 °C
+  steps), and the scale plus mode are persisted in NVS with the mode
+  migration (old mode 1 → new mode 2). Build sizes for 0.6.1:
+  flash **1,429,043 B (21.8%)**, static RAM **118,608 B (36.2%)**; headless
+  `esp32dev` 954,044 B (72.8%) flash / 48,384 B (14.8%) RAM. Both builds pass.
 
 ## Not verified yet
 

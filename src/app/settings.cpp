@@ -20,8 +20,11 @@ constexpr char kKeySchemeVersion[] = "skver";
 constexpr char kKeyMin[] = "smin";
 constexpr char kKeyMax[] = "smax";
 constexpr char kKeyMode[] = "mode";
+constexpr char kKeyModeVersion[] = "kmver";
 constexpr char kKeyMount[] = "gmount";
 constexpr char kKeyFlip[] = "gflip";
+constexpr char kKeyOilMin[] = "omin";
+constexpr char kKeyOilMax[] = "omax";
 
 // The stored scheme is a byte in NVS, so a reordering is a migration, not a
 // cosmetic change. Version 1 is the 1.85 build's six accents:
@@ -41,7 +44,18 @@ constexpr uint8_t kOldToNew[kOldSchemeCount] = {
     4,  // purple -> Purple
 };
 
-Values g_values = {0, 0, 250, 0, 0, 0};
+// The stored mode is a wire format too. Version 1 is the old two-screen
+// board (0 boost, 1 G-meter). Version 2 inserts the oil face between them,
+// so an old 1 (G-meter) must migrate to the new 2 - otherwise the page the
+// owner was left on would quietly change to a screen they never saw.
+constexpr uint8_t kModeVersion = 2;
+constexpr uint8_t kOldModeCount = 2;
+constexpr uint8_t kOldToNewMode[kOldModeCount] = {
+    0,  // old 0 (gauge)  -> new 0 (gauge)
+    2,  // old 1 (g-meter)-> new 2 (g-meter)
+};
+
+Values g_values = {0, 0, 250, 0, 0, 0, 400, 1200};
 
 Preferences g_prefs;
 bool g_open = false;
@@ -60,6 +74,18 @@ bool validScale(int16_t min10, int16_t max10) {
   return span >= kSpanMin10 && span <= kSpanMax10;
 }
 
+// Oil temperature scale validator: realistic engine-oil band (-60..200 °C in tenths).
+// Span must be at least 20 tenths (2.0 °C) for readable labels.
+bool validOilScale(int16_t min10, int16_t max10) {
+  constexpr int16_t kOilMin10 = -600;   // -60.0 °C
+  constexpr int16_t kOilMax10 = 2000;   // 200.0 °C
+  constexpr int16_t kOilSpanMin10 = 20; //   2.0 °C
+  if (min10 < kOilMin10 || max10 > kOilMax10) return false;
+  if (min10 >= max10) return false;
+  const int16_t span = (int16_t)(max10 - min10);
+  return span >= kOilSpanMin10;
+}
+
 // A failed write only costs persistence, so it is logged and ignored rather
 // than propagated: the in-RAM value stays authoritative for this boot.
 void store(const char *key, int32_t value) {
@@ -73,7 +99,7 @@ void store(const char *key, int32_t value) {
 
 void begin() {
   if (!openPrefs()) {
-    g_values = Values{0, 0, 250, 0, 0, 0};
+    g_values = Values{0, 0, 250, 0, 0, 0, 400, 1200};
     return;
   }
 
@@ -82,9 +108,10 @@ void begin() {
   // scheme while the scale survived.
   int32_t scheme = g_prefs.getInt(kKeyScheme, 0);
   const int32_t schemeVersion = g_prefs.getInt(kKeySchemeVersion, 0);
+  const int32_t modeVersion = g_prefs.getInt(kKeyModeVersion, 0);
   const int32_t min10 = g_prefs.getInt(kKeyMin, 0);
   const int32_t max10 = g_prefs.getInt(kKeyMax, 250);
-  const int32_t mode = g_prefs.getInt(kKeyMode, 0);
+  int32_t mode = g_prefs.getInt(kKeyMode, 0);
   const int32_t mount = g_prefs.getInt(kKeyMount, 0);
   const int32_t flip = g_prefs.getInt(kKeyFlip, 0);
 
@@ -109,6 +136,27 @@ void begin() {
     store(kKeySchemeVersion, kSchemeVersion);
   }
 
+  // One-way mode migration. isKey() separates a fresh board (no mode key,
+  // stay on boost) from an updated board left on the old G-meter (mode 1),
+  // which must land on the new G-meter index 2, not the oil face.
+  if (modeVersion < kModeVersion) {
+    const bool hadMode = g_prefs.isKey(kKeyMode);
+    if (hadMode && mode >= 0 && mode < kOldModeCount) {
+      const int32_t mapped = kOldToNewMode[mode];
+      Serial.printf("[set] mode %ld -> %ld (2-screen to 3-screen order)\n",
+                    (long)mode, (long)mapped);
+      mode = mapped;
+    } else {
+      if (hadMode) {
+        Serial.printf("[set] stored mode %ld has no migration; boost\n",
+                      (long)mode);
+      }
+      mode = 0;
+    }
+    store(kKeyMode, mode);
+    store(kKeyModeVersion, kModeVersion);
+  }
+
   if (scheme >= 0 && scheme < kSchemeCount) {
     g_values.scheme = (uint8_t)scheme;
   } else {
@@ -123,17 +171,31 @@ void begin() {
     Serial.printf("[set] stored scale %ld..%ld rejected; using 0..25\n",
                   (long)min10, (long)max10);
   }
-  if (mode >= 0 && mode <= 1) g_values.mode = (uint8_t)mode;
+  const int32_t omin10 = g_prefs.getInt(kKeyOilMin, 400);
+  const int32_t omax10 = g_prefs.getInt(kKeyOilMax, 1200);
+
+  if (validOilScale((int16_t)omin10, (int16_t)omax10)) {
+    g_values.omin10 = (int16_t)omin10;
+    g_values.omax10 = (int16_t)omax10;
+  } else if (omin10 != 400 || omax10 != 1200) {
+    Serial.printf("[set] stored oil scale %ld..%ld rejected; using 40..120\n",
+                  (long)omin10, (long)omax10);
+  }
+  if (mode >= 0 && mode <= 2) g_values.mode = (uint8_t)mode;
   if (mount >= 0 && mount <= 2) g_values.mount = (uint8_t)mount;
   if (flip >= 0 && flip <= 1) g_values.gflip = (uint8_t)flip;
 
   Serial.printf("[set] scheme %u, scale %.1f..%.1f PSI\n", (unsigned)g_values.scheme,
                 (double)g_values.min10 / 10.0, (double)g_values.max10 / 10.0);
+  Serial.printf("[set] oil scale %.1f..%.1f °C\n",
+                (double)g_values.omin10 / 10.0, (double)g_values.omax10 / 10.0);
   const char *mountName = g_values.mount == 2   ? "auto"
                           : g_values.mount == 1 ? "flat"
                                                 : "upright";
-  Serial.printf("[set] mode %s, mount %s, flip %u\n",
-                g_values.mode ? "g-meter" : "gauge", mountName,
+  const char *modeName = g_values.mode == 2 ? "g-meter"
+                         : g_values.mode == 1 ? "oil"
+                                              : "gauge";
+  Serial.printf("[set] mode %s, mount %s, flip %u\n", modeName, mountName,
                 (unsigned)g_values.gflip);
 }
 
@@ -157,8 +219,18 @@ bool setScale(int16_t min10, int16_t max10) {
   return true;
 }
 
+bool setOilScale(int16_t min10, int16_t max10) {
+  if (!validOilScale(min10, max10)) return false;
+  if (min10 == g_values.omin10 && max10 == g_values.omax10) return true;
+  g_values.omin10 = min10;
+  g_values.omax10 = max10;
+  store(kKeyOilMin, min10);
+  store(kKeyOilMax, max10);
+  return true;
+}
+
 bool setMode(uint8_t mode) {
-  if (mode > 1) return false;
+  if (mode > 2) return false;
   if (mode == g_values.mode) return true;
   g_values.mode = mode;
   store(kKeyMode, mode);

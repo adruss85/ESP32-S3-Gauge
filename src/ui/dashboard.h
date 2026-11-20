@@ -1,11 +1,11 @@
 // =====================================================================
 // dashboard.h - which screen is on the glass, and the switch between them
 //
-// The boost gauge and the G-meter are two roots on the same LVGL screen.
-// The dashboard owns the IMU sampling, the mode setting and the short
-// cross-fade.  It keeps the G-meter math running even while the boost
-// gauge is displayed, so switching screens shows a warm 1 s average rather
-// than a blank dot.
+// The boost gauge, the oil temperature face and the G-meter are three
+// roots on the same LVGL screen. The dashboard owns the IMU sampling, the
+// mode setting and the short cross-fade. It keeps the G-meter math running
+// even while a face is displayed, so switching screens shows a warm 1 s
+// average rather than a blank dot.
 // =====================================================================
 #pragma once
 
@@ -16,8 +16,9 @@
 namespace dashboard {
 
 enum class Mode : uint8_t {
-  Gauge = 0,
-  GMeter = 1,
+  Gauge = 0,  // boost psi face (270 deg arc, BOOST PSI)
+  Oil = 1,     // engine oil temp face (270 deg arc, OIL deg C)
+  GMeter = 2,  // accelerometer dot + tail + readout
 };
 
 // Which transition draws a mode change. A key or web change cross-fades; a
@@ -43,6 +44,7 @@ bool moving();
 void nextScheme();
 void setScheme(theme::Scheme s, bool persist = true);
 bool applyScale(int16_t min10, int16_t max10);
+bool applyOilScale(int16_t min10, int16_t max10);
 
 void setMount(gmeter::Mount m, bool flip, bool persist = true);
 void zeroG();

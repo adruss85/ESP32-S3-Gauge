@@ -19,9 +19,11 @@ struct Values {
   uint8_t scheme;   // index into theme::Scheme, 0 = Midnight
   int16_t min10;    // scale minimum, tenths of a PSI
   int16_t max10;    // scale maximum, tenths of a PSI
-  uint8_t mode;     // 0 = boost gauge, 1 = G-meter
+  uint8_t mode;     // 0 = boost gauge, 1 = oil temperature, 2 = G-meter
   uint8_t mount;    // 0 = upright, 1 = flat, 2 = auto from gravity
   uint8_t gflip;    // 1 = invert the accel/brake direction
+  int16_t omin10;   // oil temperature scale minimum, tenths of a degree C
+  int16_t omax10;   // oil temperature scale maximum, tenths of a degree C
 };
 
 // Load from NVS and validate. Safe to call once from setup(); a missing or
@@ -42,6 +44,11 @@ bool setScheme(uint8_t scheme);
 // span is wide enough for six readable labels.
 bool setScale(int16_t min10, int16_t max10);
 
+// Persist the oil temperature scale, in tenths of a degree C. The accepted
+// window is a realistic oil-temperature band; six readable labels need a
+// span of at least 2 degrees.
+bool setOilScale(int16_t min10, int16_t max10);
+
 // Persist the display mode (0 gauge, 1 G-meter).
 bool setMode(uint8_t mode);
 
@@ -55,5 +62,8 @@ inline constexpr int16_t kMinLimit10 = -150;  // -15.0 PSI
 inline constexpr int16_t kMaxLimit10 = 500;   //  50.0 PSI
 inline constexpr int16_t kSpanMin10 = 50;     //   5.0 PSI
 inline constexpr int16_t kSpanMax10 = 600;    //  60.0 PSI
+
+// Oil temperature span minimums, tenths of a degree C.
+inline constexpr int16_t kOilSpanMin10 = 20;  //   2.0 °C
 
 }  // namespace settings

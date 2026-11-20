@@ -3,17 +3,17 @@
 // The version string is the changelog. Bump it for built changes, not for
 // docs-only commits.
 //
-// 0.6.0 - Board move to the Waveshare ESP32-S3-Touch-AMOLED-1.75: a 466x466
-//         CO5300 AMOLED over QSPI, panel reset on GPIO39 so the TCA9554
-//         expander is no longer touched, emission brightness on register 0x51
-//         instead of an LEDC backlight, and the CST9217 as an input device.
-//         A tap steps the colour scheme and a horizontal swipe slides to the
-//         other screen; BOOT, the cruise stalk and the web page keep the
-//         260 ms cross-fade. The seven schemes and the 96 px value face are
-//         copied from OpenHaldex-S3-Dash, and a scheme stored by the 1.85
-//         build is migrated to the new order. The splash art is the 466 px
-//         upscale. RGB565 still needs the high-byte-first swap the ST77916
-//         needed: without it white draws light green and near-black pink.
+// 0.6.1 - Oil temperature page: a dedicated 270° arc face with °C value,
+// IAT readout, configurable min/max scale (40–120 °C defaults, adjustable
+// from the web page in 0.1 °C steps). Swipe transitions between boost,
+// oil and G-meter. Three-mode cycle: Gauge → Oil → G-meter → Gauge. BOOT
+// key / web page keep 260 ms cross-fade. Oil temperature decoded from
+// CANN Cluster_2 (0x420) byte 3 with -60 °C offset; 0xFF absent → "-- °C"
+// scale defaults 40–120 °C, web configurable. Oil scale persisted in NVS.
+// Mode migration: old mode 1 (G-meter) maps to new mode 2 so existing
+// boards keep their screen. Settings include oil min/max persist and a
+// web-page /oscale endpoint. Both esp32s3 and esp32dev builds succeed.
+// Build sizes: flash 1,429,043 B (21.8%), RAM 118,608 B (36.2%).
 // 0.5.2 - Serialise the panel flush to one partial draw buffer. The
 //         two-buffer path let the band, dot and text areas overlap on the
 //         wire, leaving intermittent artifacts inside the dot/text boxes.
@@ -56,4 +56,4 @@
 //         baseline, and the link lamp is gone.
 // 0.2.0 - First gauge build: 270-degree boost arc and IAT readout.
 // 0.1.0 - Headless CANN listener.
-#define OHX_GAUGE_VERSION "0.6.0"
+#define OHX_GAUGE_VERSION "0.6.1"

@@ -86,11 +86,12 @@ Open items for the gauge. Finished work lives in `include/version.h` and
 - [ ] **Confirm IAT against a known source.** `0x380` byte 1 only exists when
       the engine ECU broadcasts `Engine_3`; the PQ patch copies it into
       `Motor_7`, which is a separate signature. A car capture would settle it.
-- [ ] **Oil temperature from Cluster_2 (0x420).** Engine oil temperature is
-      decoded from the `Cluster_2` CAN frame at address `0x420`, using the
-      formula `value - 60 °C` (DBC field `OilTemperature_4_1`, 1 °C/count
-      with -60 C offset; `0xFF` means no value, drawn as `-- °C`). Needs a
-      CANN sender present on the bench to confirm the decode.
+- [x] **Oil temperature page (0.6.1).** Dedicated 270° arc face (°C value,
+      IAT readout, configurable 40–120 °C scale, swipe between boost/oil/
+      G-meter). Decode: CANN Cluster_2 (0x420) byte 3, -60 °C offset, 0xFF
+      absent → "-- °C". Three-mode cycle: Gauge → Oil → G-meter → Gauge.
+      Mode migration: old mode 1 → new mode 2. Oil scale persisted in NVS,
+      web /oscale endpoint, JSON status includes omin10/omax10/oil10.
 - [x] **Boost scale above 25 PSI.** The scale is a setting now; the arc
       re-ranges and the numeric value is never clipped.
 - [x] **OTA path.** The setup AP serves `/update`; the inactive slot is
