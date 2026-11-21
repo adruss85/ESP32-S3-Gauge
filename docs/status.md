@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 20 Nov 2026, firmware **0.6.2**.
+Last updated: 21 Nov 2026, firmware **0.6.3**.
 
 > **Hardware state.** The gauge runs on a **Waveshare ESP32-S3-Touch-AMOLED-1.75**
 > (466x466 CO5300 AMOLED, CST9217 touch). The 1.85 unit this firmware was
@@ -142,6 +142,22 @@ Last updated: 20 Nov 2026, firmware **0.6.2**.
 
 ## Not verified yet
 
+* **0.6.3 has no recorded hardware verification.** This entry was written from
+  the release build (clean, `2f61f3b`); no bench log for these changes exists
+  in this file, so treat them as compile-verified only. What
+  changed: a sixth **Drive** screen (RPM, four wheel speeds and slip %, Haldex
+  target/actual, ABS/TC chips) in the swipe cycle
+  Gauge -> Oil -> OilPress -> Coolant -> G-meter -> Drive -> Gauge; oil
+  pressure converted from bar to **PSI** (`Cluster_2` `0x420` byte 4,
+  0.1 bar/count then x 14.5038) with a new 58..290 PSI default scale; and a
+  fix for the oil-temperature decode, where variable shadowing in
+  `handleCann()` stopped `Cluster_2` byte 3 from reaching the readout. The
+  slip values come from `OHX_STATUS` `slip[4]` with `OHX_NONE8` meaning
+  absent. Confirm on the board: the six-screen order (swipe and the 700 ms
+  BOOT hold), that the Drive screen draws no stale values when a field is
+  absent, and that oil pressure reads a sensible PSI against the previous
+  bar reading. The oil-temperature fix needs a CANN sender to see a value at
+  all.
 * **Touch gestures on the glass.** The controller answers and reports its own
   resolution, and `mirror_x=1, mirror_y=1, swap_xy=0` follows Waveshare's BSP,
   but no finger has been on the panel through this firmware. Confirm a tap
@@ -198,14 +214,14 @@ Last updated: 20 Nov 2026, firmware **0.6.2**.
 * **Long-run stability.** No soak test past a few minutes; PSRAM pool and
   internal RAM have not been watched over hours.
 
-## Build sizes, 0.6.2
+## Build sizes, 0.6.3
 
-Measured with `./.venv/bin/pio run -e esp32s3`:
+Measured with `./.venv/bin/pio run -e esp32s3` from a clean build of `v0.6.3`:
 
 | Resource | Used | Capacity | Note |
 |---|---|---|---|
-| Flash | 1,440,087 B (22.0%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
-| Static RAM | 118,808 B (36.3%) | 327,680 B | one 466×48 draw buffer (44,736 B) |
+| Flash | 1,462,887 B (22.3%) | 6,553,600 B | one of two 6.25 MB OTA app slots |
+| Static RAM | 119,000 B (36.3%) | 327,680 B | one 466×48 draw buffer (44,736 B) |
 | LVGL pool | 128 KB | — | allocated from 8 MB PSRAM |
 | Draw buffers | 44,736 B | — | 1 x 466x48 RGB565, internal RAM |
 | G-meter canvas | 361,616 B | — | 466x388 RGB565 in PSRAM, one object |
@@ -216,7 +232,13 @@ The move cost **35,721 B** of flash and **1,832 B** of static RAM over 0.5.2
 face and the larger splash JPEG against the six stock Montserrat faces that
 were dropped. The G-meter canvas and the splash picture are allocated from
 PSRAM, so they do not appear in the static RAM figure. The headless
-`esp32dev` build is 953,408 B (72.7%) flash and 48,368 B (14.8%) RAM.
+`esp32dev` build is 955,304 B (72.9%) flash and 48,432 B (14.8%) RAM.
+
+0.6.3 added **22,800 B** of flash and **192 B** of static RAM over 0.6.2
+(1,440,087 B / 118,808 B), mostly the Drive screen's LVGL objects; the
+headless build grew 1,896 B. Both the display and headless builds pass, and
+the host checks (`tools/gmeter_test.cpp` 17/17, `tools/boot_button_test.cpp`
+7/7) pass.
 
 The capture build (`-DGAUGE_CAPTURE=1`) temporarily raises the LVGL pool to
 1 MB because a snapshot is a full 466x466 RGB565 image. That build is only for
