@@ -3,6 +3,14 @@
 // The version string is the changelog. Bump it for built changes, not for
 // docs-only commits.
 //
+// 0.6.4 - Correct the coolant and oil-pressure sources. Coolant is
+// Cluster_2 (0x420) byte 4, 0.75 °C/count - 48 (0.6.2 read Engine_1 byte 1,
+// which is Inner_Engine_Torque). Oil pressure is Engine_7 (0x588) bytes 5-6,
+// the raw 10-bit ADC of the rear-O2 input now carrying a PST-F 1 sensor:
+// (volts - 0.5) / 0.4 bar, x 14.5038 PSI (0.6.2/0.6.3 read Cluster_2 byte 4,
+// which is coolant). Oil-pressure scale default 0..145 PSI (0..10 bar).
+// Build sizes: flash 1,462,979 B (22.3%), RAM 119,008 B (36.3%); esp32dev
+// 955,400 B (72.9%) flash / 48,432 B (14.8%) RAM.
 // 0.6.3 - Drive screen (drivetrain visualisation): RPM, wheel speeds + slip
 // %, Haldex target/actual, ABS/TC chips. Wheel slip from OHX_STATUS slip[4].
 // Oil pressure now in PSI (was bar): Cluster_2 (0x420) byte 4 converted at
@@ -64,4 +72,4 @@
 //         baseline, and the link lamp is gone.
 // 0.2.0 - First gauge build: 270-degree boost arc and IAT readout.
 // 0.1.0 - Headless CANN listener.
-#define OHX_GAUGE_VERSION "0.6.3"
+#define OHX_GAUGE_VERSION "0.6.4"

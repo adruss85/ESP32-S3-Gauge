@@ -5,7 +5,10 @@
 //
 //   OHX_STATUS  OpenHaldex-C6 -> 10 Hz, carries boost (mbar above ambient)
 //   CANN        bodycan/C6    -> the car's CAN frames, carries Engine_3
-//                                (0x380) intake air temperature
+//                                (0x380) intake air temperature, Cluster_2
+//                                (0x420) coolant and engine-oil temperature,
+//                                and Engine_7 (0x588) oil pressure on a
+//                                ForbesAutomotive-patched ME7
 //
 // The controller's access point is the anchor. Scanning for it gives the
 // channel without joining it, which is all ESP-NOW needs. If the anchor
@@ -232,6 +235,9 @@ void handleStatus(const esp_now_recv_info_t *info, const uint8_t *data, int len)
   t.lockActualValid = (st.lockActual != OHX_NONE8);
   t.lockActual = t.lockActualValid ? st.lockActual : 0;
 
+  // Haldex lock target (requested)
+  t.lockTarget = st.lockTarget;
+
   taskENTER_CRITICAL(&g_mux);
   noteSender(info->src_addr);
   g_tel = t;
@@ -332,17 +338,29 @@ void handleCann(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
       haveIat = true;
     }
 
-    // Engine_1 (0x280): byte 1 is CoolantTemp_4_1, 1 C/count with -40 C
-    // offset. 0xFF means no value.
-    if (id == 0x280 && frameLen >= 2 && data[off + 1] != 0xFF) {
-      coolant = (float)data[off + 1] - 40.0f;
+    // Cluster_2 (0x420): byte 4 is CoolantTemp__4_1__Cluster_2_,
+    // 0.75 C/count with a -48 C offset (vw_pq.dbc). 0xFF means no value.
+    // Engine_1 (0x280) byte 1 is Inner_Engine_Torque, not coolant, so the
+    // 0.6.2 decode read an engine-torque byte and subtracted 40 from it.
+    if (id == 0x420 && frameLen >= 5 && data[off + 4] != 0xFF) {
+      coolant = (float)data[off + 4] * 0.75f - 48.0f;
       haveCoolant = true;
     }
 
-    // Cluster_2 (0x420): byte 4 is OilPressure_4_1, 0.1 bar/count.
-    // 0xFF means no value. Convert to PSI (1 bar = 14.5038 PSI).
-    if (id == 0x420 && frameLen >= 5 && data[off + 4] != 0xFF) {
-      oilPress = (float)data[off + 4] * 0.1f * 14.5038f;
+    // Engine_7 / Motor_7 (0x588): bytes 5-6 are the raw 10-bit ADC of the
+    // rear-O2 input, now carrying a PST-F 1 oil-pressure sensor. Only the
+    // ForbesAutomotive ME7 patch lengthens the stock three-byte frame to
+    // eight, so the length is the gate: reading past a stock frame is how a
+    // missing sensor becomes a confident 0.00. Little-endian, sent unscaled
+    // so the gauge owns the transfer: 0.5 V at 0 bar, 4.5 V at 10 bar, so
+    // volts = raw * 5/1024 and bar = (volts - 0.5) / 0.4. Deliberately not
+    // clamped at zero - a reading below the sensor's own zero is an unwired
+    // plug, and a fake 0.0 bar on an oil gauge is worse than a negative one.
+    if (id == 0x588 && frameLen >= 8) {
+      const uint16_t raw =
+          (uint16_t)((data[off + 5] | (data[off + 6] << 8)) & 0x03FF);
+      const float volts = (float)raw * 5.0f / 1024.0f;
+      oilPress = ((volts - 0.5f) / 0.4f) * 14.5038f;
       haveOilPress = true;
     }
 
@@ -884,6 +902,7 @@ Telemetry telemetry() {
   t.oilPressValid = g_lastOilPressMs && (uint32_t)(now - g_lastOilPressMs) <= kIatFreshMs;
   t.oilPressPsi = t.oilPressValid ? (float)g_oilPressPsi : NAN;
   t.term58s = g_term58s;
+  t.lockTarget = g_tel.lockTarget;
   taskEXIT_CRITICAL(&g_mux);
   return t;
 }

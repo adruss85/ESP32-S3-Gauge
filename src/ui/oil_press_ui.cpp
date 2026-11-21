@@ -18,9 +18,11 @@
 namespace oil_press_ui {
 namespace {
 
-int16_t g_min10 = 580;  // 58.0 PSI * 10 (≈4 bar)
-int16_t g_max10 = 2900; // 290.0 PSI * 10 (≈20 bar)
-int g_arcRange = 2320;  // (2900 - 580)
+// PST-F 1 sensor: 0 bar at 0.5 V, 10 bar at 4.5 V -> 0..145 PSI. The stored
+// setting replaces these at boot; this is only the face's own default.
+int16_t g_min10 = 0;    //   0.0 PSI
+int16_t g_max10 = 1450; // 145.0 PSI (10 bar)
+int g_arcRange = 1450;  // (1450 - 0)
 
 int32_t g_lastDrawn = INT32_MIN;
 bool g_scaleDirty = true;

@@ -115,8 +115,8 @@ input[type=file]{font-size:13px;color:#b9c4d0;max-width:100%}
 <p class=sub id=ocmmsg></p></div>
 
 <div class=card><form id=ops class=row>
-<label>Min <input id=opmin type=number step=.1 required> bar</label>
-<label>Max <input id=opmax type=number step=.1 required> bar</label>
+<label>Min <input id=opmin type=number step=.1 required> PSI</label>
+<label>Max <input id=opmax type=number step=.1 required> PSI</label>
 <button>Apply</button></form>
 <p class=sub id=opsmsg></p></div>
 
@@ -243,10 +243,10 @@ async function tick(){
       "boost   "+val(s.boost10)+" psi"+(s.boost10===null?"  (no OHX_STATUS)":"")+
       "\nIAT     "+val(s.iat10)+" \u00b0C"+(s.iat10===null?"  (no Engine_3)":"")+
       "\nOil    "+val(s.oil10)+" \u00b0C"+(s.oil10===null?"  (no Cluster_2)":"")+
-      "\nOilP   "+val(s.oilp10)+" bar"+(s.oilp10===null?"  (no Oil_Pressure)":"")+
-      "\nCool   "+val(s.coolant10)+" \u00b0C"+(s.coolant10===null?"  (no Engine_1)":"")+
+      "\nOilP   "+val(s.oilp10)+" psi"+(s.oilp10===null?"  (no Engine_7)":"")+
+      "\nCool   "+val(s.coolant10)+" \u00b0C"+(s.coolant10===null?"  (no Cluster_2)":"")+
       "\nOil scale "+(s.omin10/10).toFixed(1)+".."+(s.omax10/10).toFixed(1)+" \u00b0C"+
-      "\nOilP scale "+(s.opmin10/10).toFixed(1)+".."+(s.opmax10/10).toFixed(1)+" bar"+
+      "\nOilP scale "+(s.opmin10/10).toFixed(1)+".."+(s.opmax10/10).toFixed(1)+" psi"+
       "\nCool scale "+(s.cmin10/10).toFixed(1)+".."+(s.cmax10/10).toFixed(1)+" \u00b0C"+
       "\ng avg   "+valg(s.g100)+" g"+(s.g100===null?"  (no IMU)":"")+
       "\nG long  "+valg(s.gv100)+" g \u00b7 lat "+valg(s.gl100)+" g"+

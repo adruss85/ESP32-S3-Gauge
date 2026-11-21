@@ -59,7 +59,7 @@ constexpr uint8_t kOldToNewMode[kOldModeCount] = {
     4,  // old 1 (g-meter)-> new 4 (g-meter)
 };
 
-Values g_values = {0, 0, 250, 0, 0, 0, 400, 1200, 580, 1200, 58, 290};
+Values g_values = {0, 0, 250, 0, 0, 0, 400, 1200, 0, 1450, 40, 1200};
 
 Preferences g_prefs;
 bool g_open = false;
@@ -127,7 +127,7 @@ void store(const char *key, int32_t value) {
 
 void begin() {
   if (!openPrefs()) {
-    g_values = Values{0, 0, 250, 0, 0, 0, 400, 1200, 580, 2900, 40, 1200};
+    g_values = Values{0, 0, 250, 0, 0, 0, 400, 1200, 0, 1450, 40, 1200};
     return;
   }
 
@@ -213,16 +213,16 @@ void begin() {
   if (mount >= 0 && mount <= 2) g_values.mount = (uint8_t)mount;
   if (flip >= 0 && flip <= 1) g_values.gflip = (uint8_t)flip;
 
-  const int32_t omin10p = g_prefs.getInt(kKeyOilPressMin, 580);
-  const int32_t omax10p = g_prefs.getInt(kKeyOilPressMax, 2900);
+  const int32_t omin10p = g_prefs.getInt(kKeyOilPressMin, 0);
+  const int32_t omax10p = g_prefs.getInt(kKeyOilPressMax, 1450);
   const int32_t cmin10 = g_prefs.getInt(kKeyCoolantMin, 400);
   const int32_t cmax10 = g_prefs.getInt(kKeyCoolantMax, 1200);
 
   if (validOilPressScale((int16_t)omin10p, (int16_t)omax10p)) {
     g_values.omin10p = (int16_t)omin10p;
     g_values.omax10p = (int16_t)omax10p;
-  } else if (omin10p != 580 || omax10p != 2900) {
-    Serial.printf("[set] stored oil press scale %ld..%ld rejected; using 58..290\n",
+  } else if (omin10p != 0 || omax10p != 1450) {
+    Serial.printf("[set] stored oil press scale %ld..%ld rejected; using 0..145\n",
                   (long)omin10p, (long)omax10p);
   }
   if (validCoolantScale((int16_t)cmin10, (int16_t)cmax10)) {

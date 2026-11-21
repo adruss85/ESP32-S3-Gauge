@@ -98,6 +98,12 @@ Open items for the gauge. Finished work lives in `include/version.h` and
   0xFF absent → "-- bar"). Five-mode cycle Gauge → Oil → OilPress → Coolant →
   GMeter → Gauge. Scale defaults 40..120 °C (min span 10 °C) and 4..20 bar
   (min span 1 bar), editable via /cscale /opscale. JSON status reports all.
+- [x] **Coolant and oil-pressure sources corrected (0.6.4).** Coolant:
+      Cluster_2 (0x420) byte 4, 0.75 °C/count - 48 (0.6.2 had read Engine_1
+      byte 1, which is Inner_Engine_Torque). Oil pressure: Engine_7 (0x588)
+      bytes 5-6, the rear-O2 ADC through the PST-F 1 transfer, x14.5038 to
+      PSI; the 8-byte frame is required and the result is not clamped.
+      Default scale 0..145 PSI. Compile-verified only.
 - [ ] **Mode migration for five modes.** (Old mode 1 → new mode 4 mapping.)
 - [x] **Boost scale above 25 PSI.** The scale is a setting now; the arc
       re-ranges and the numeric value is never clipped.

@@ -5,8 +5,8 @@
 // a large value with decimal point on the baseline, a COOLANT °C caption,
 // and the intake-air temperature under a thin rule.
 // The arc scale is configurable (0.1 °C steps) and persisted in NVS.
-// Decode: Engine_1 (0x280) byte 1, 1 C/count with -40 C offset; 0xFF absent
-// -> "-- °C".
+// Decode: Cluster_2 (0x420) byte 4, 0.75 C/count with -48 C offset; 0xFF
+// absent -> "-- °C".
 // =====================================================================
 #include "ui/coolant_ui.h"
 
@@ -264,8 +264,8 @@ void begin() {
 void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   if (!g_ready) return;
 
-  // Coolant from Engine_1 (0x280): byte 1 is CoolantTemp_4_1,
-  // 1 °C/count with -40 °C offset. 0xFF means absent.
+  // Coolant from Cluster_2 (0x420): byte 4 is CoolantTemp_4_1,
+  // 0.75 °C/count with a -48 °C offset. 0xFF means absent.
   static float shown = NAN;
   const float target = t.coolantValid ? t.coolantC : NAN;
 

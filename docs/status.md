@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 21 Nov 2026, firmware **0.6.3**.
+Last updated: 21 Nov 2026, firmware **0.6.4**.
 
 > **Hardware state.** The gauge runs on a **Waveshare ESP32-S3-Touch-AMOLED-1.75**
 > (466x466 CO5300 AMOLED, CST9217 touch). The 1.85 unit this firmware was
@@ -140,6 +140,22 @@ Last updated: 21 Nov 2026, firmware **0.6.3**.
   via `/cscale` and `/opscale`, reported in /api/status. Swipe order matches
   the touch gestures (tap steps scheme, horizontal swipe slides).
 
+- [x] **Coolant and oil-pressure sources corrected (0.6.4).** Coolant now
+  reads `Cluster_2` (`0x420`) byte 4, 0.75 °C/count with a -48 °C offset
+  (DBC `CoolantTemp__4_1__Cluster_2_`), the same field and curve the S3-dash
+  uses; 0.6.2 had read `Engine_1` (`0x280`) byte 1, which is
+  `Inner_Engine_Torque`. Oil pressure now reads `Engine_7` (`0x588`) bytes
+  5-6, the raw 10-bit ADC of the rear-O2 input carrying a PST-F 1 sensor
+  (0.5 V at 0 bar, 4.5 V at 10 bar): `bar = (volts - 0.5) / 0.4`, then
+  × 14.5038 PSI. The 8-byte length gate means a stock 3-byte frame still
+  draws `--`, and the value is not clamped, so an unwired plug reads
+  negative rather than a fake 0.0. The oil-pressure default scale is now
+  0..145 PSI (0..10 bar); a stored 58..290 survives, so change it on the web
+  page after flashing. Compile-verified only - neither value has been seen
+  on the car through this gauge yet. Build sizes: flash **1,462,979 B
+  (22.3%)**, static RAM **119,008 B (36.3%)**; headless `esp32dev`
+  955,400 B (72.9%) flash / 48,432 B (14.8%) RAM.
+
 ## Not verified yet
 
 * **0.6.3 has no recorded hardware verification.** This entry was written from
@@ -156,8 +172,9 @@ Last updated: 21 Nov 2026, firmware **0.6.3**.
   absent. Confirm on the board: the six-screen order (swipe and the 700 ms
   BOOT hold), that the Drive screen draws no stale values when a field is
   absent, and that oil pressure reads a sensible PSI against the previous
-  bar reading. The oil-temperature fix needs a CANN sender to see a value at
-  all.
+  bar reading. The oil-pressure source was replaced in 0.6.4, so that check
+  belongs to 0.6.4 now. The oil-temperature fix needs a CANN sender to see a
+  value at all.
 * **Touch gestures on the glass.** The controller answers and reports its own
   resolution, and `mirror_x=1, mirror_y=1, swap_xy=0` follows Waveshare's BSP,
   but no finger has been on the panel through this firmware. Confirm a tap
