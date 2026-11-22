@@ -15,14 +15,17 @@ Open items for the gauge. Finished work lives in `include/version.h` and
       logs the corner you touched (that is the mirror-flag check). Decide
       whether a tap should wake a dimmed screen and whether the round edge
       should reject touches outside the circle.
-- [ ] **The mode request on the air.** Nothing in 0.7.0 has been sent from
-      this board. Confirm a tap produces `[haldex] mode -> <name> (sent)` and
-      then `<name>: ok (ack after N ms)`, that the controller's own page shows
-      the same mode, and that the Haldex face updates on the next packet.
-      Then try: a wrong key (`wrong key`), no stored key on a passworded AP
-      (`no key`, and nothing on the air), the controller with ESP-NOW control
-      disabled (`disabled`), and both this gauge and `OpenHaldex-S3-Dash`
-      stepping at once (one of them should report `stale` and retry once).
+- [ ] **The mode verdict on the glass.** 0.7.0's send is confirmed in use:
+      the controller changes mode. 0.7.1 now judges the request by the mode
+      byte in the next status instead of the ack fields, which never matched
+      and left the face saying `no reply` after a successful change. Confirm:
+      a tap logs `[haldex] mode -> <name> (sent)` then
+      `<name>: ok (mode flag after N ms)` and the big label changes;
+      controller off -> `NO CONNECTION`; a request it ignores -> `NO CHANGE`
+      and `not confirmed, flag still <mode>` on the console; two taps inside
+      one packet period -> the second is refused as `a request is already in
+      flight`. A wrong key now reads as NO CHANGE on the glass - the console
+      line is the only diagnosis, by design.
 - [ ] **Slide animation, watched.** The 280 ms swipe push ran without a crash
       but was not watched frame by frame; check it does not tear on the glass.
 - [ ] **AMOLED burn-in.** A fixed arc, ticks and captions are lit for hours.
@@ -55,7 +58,7 @@ Open items for the gauge. Finished work lives in `include/version.h` and
 - [ ] **Haldex face layout.** Capture with `-DGAUGE_CAPTURE_DRIVE=1` and check
       the two value rows sit on their captions' baseline, that `60:40` and
       `EXPERT` are both comfortable at 48 px on the round glass, and that a
-      five-second answer line (`60:40: wrong key`) fits without clipping.
+      five-second answer line (`60:40: NO CHANGE`) fits without clipping.
 - [ ] **Cruise-stalk accent combo.** Press Cancel + Down together on the PQ
       stalk and confirm it changes the scheme exactly once
       (`[ui] cruise combo`).

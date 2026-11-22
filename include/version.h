@@ -3,6 +3,20 @@
 // The version string is the changelog. Bump it for built changes, not for
 // docs-only commits.
 //
+// 0.7.1 - Judge the mode request by the mode flag, not by the ack. In use the
+// request worked and the controller changed mode, but the ack echo
+// (ackSrc/ackSeq/ackResult) never matched, so the Haldex face said "no reply"
+// after a change that had already happened. The ack fields are no longer read:
+// the verdict is the mode byte in the controller's next status. One tap is at
+// most one frame (the STALE retry is gone, which is also what rule 2 wants);
+// a second tap waits for a fresh status, because that is what refills the
+// nonce. The sub-line has three answers: sending, ok (green) when the flag
+// becomes the requested mode, NO CHANGE (amber) when the controller is
+// broadcasting but the flag does not move, and NO CONNECTION (dim) when
+// nothing is being broadcast. No ack vocabulary on the glass; a refused send
+// (no key, no fresh status, radio) is console detail.
+// Build sizes: flash 1,466,647 B (22.4%), RAM 119,088 B (36.3%); esp32dev
+// 956,788 B (73.0%) flash / 48,520 B (14.8%) RAM.
 // 0.7.0 - The Haldex face, and the gauge's first and only transmission. The
 // drive view's drivetrain drawing could not be read on the glass in a car, so
 // it is now four lines of type: mode (STOCK/FWD/50:50/60:40/75:25/EXPERT),
@@ -101,4 +115,4 @@
 //         baseline, and the link lamp is gone.
 // 0.2.0 - First gauge build: 270-degree boost arc and IAT readout.
 // 0.1.0 - Headless CANN listener.
-#define OHX_GAUGE_VERSION "0.7.0"
+#define OHX_GAUGE_VERSION "0.7.1"

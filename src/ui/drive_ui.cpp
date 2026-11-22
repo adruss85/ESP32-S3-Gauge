@@ -12,11 +12,14 @@
 // screens on the same car cannot disagree about what a word means.
 //
 // A tap here asks the controller for the next mode, which is the only thing
-// this firmware transmits. The request goes out over ESP-NOW and the
-// controller's verdict comes back in the ack fields of its next status
-// broadcast, never as a reply, so the sub-line is where that verdict lands:
-// a control whose only feedback is a number that may not have moved is not a
-// control.
+// this firmware transmits. The request goes out over ESP-NOW, and the only
+// verdict is the controller's own mode byte in its next status broadcasts:
+// the request worked when that byte becomes the mode that was asked for.
+// The ack fields the controller also sends are deliberately not read - in
+// use they disagreed with the flag, and the flag is what the driver reads.
+// No reply, no key, wrong key and the rest are console detail, not words on
+// the glass: the glass has exactly three answers, sending, ok and the two
+// failures the driver can act on (NO CHANGE, NO CONNECTION).
 // =====================================================================
 #include "ui/drive_ui.h"
 
@@ -26,7 +29,6 @@
 
 #include "app/settings.h"
 #include "net/ohx_now.h"
-#include "ohx_proto.h"
 #include "theme.h"
 
 namespace drive_ui {
@@ -41,8 +43,8 @@ constexpr uint8_t kModeCount = 6;
 const char *const kModeNames[kModeCount] = {"STOCK", "FWD",     "50:50",
                                            "60:40", "75:25", "EXPERT"};
 
-constexpr uint32_t kAckWaitMs = 1500;     // sent, no answer: stop waiting
-constexpr uint32_t kResultHoldMs = 5000;  // how long the answer stays up
+constexpr uint32_t kConfirmMs = 1500;     // wait for the mode flag to move
+constexpr uint32_t kResultHoldMs = 5000;  // how long the verdict stays up
 
 // Absolute layout for the 466 px round glass. Everything is a plain label:
 // there is no canvas and nothing animates, so a value change invalidates one
@@ -82,16 +84,20 @@ int g_slideX = 0;
 int g_modeShown = -1;
 bool g_standalone = false;
 
-// Command state: one request in flight at a time. A second request would sign
-// with the nonce the first one has just spent and come back STALE.
+// The verdict is the controller's mode byte, so the state is only what the
+// glass needs: one request in flight, and the last outcome. `sentPackets` is
+// the status counter at the send, which is how a status that could carry the
+// verdict is told from one that predates it (and how a tap knows the nonce is
+// fresh again).
+enum class Outcome : uint8_t { None, Ok, NoChange, NoConnection };
+
 struct Cmd {
   bool pending = false;
-  bool retried = false;
   uint8_t want = 0;
-  bool haveResult = false;
-  uint8_t result = 0;
   uint32_t sentMs = 0;
-  uint32_t resultMs = 0;
+  uint32_t sentPackets = 0;
+  Outcome outcome = Outcome::None;
+  uint32_t outcomeMs = 0;
 };
 Cmd g_cmd;
 
@@ -108,7 +114,6 @@ uint32_t g_lastSubCol = 0;
 lv_color_t col_cyan() { return lv_color_hex(0x22D3EE); }
 lv_color_t col_amber() { return lv_color_hex(0xF59E0B); }
 lv_color_t col_green() { return lv_color_hex(0x22C55E); }
-lv_color_t col_red() { return lv_color_hex(0xEF4444); }
 
 void plain(lv_obj_t *obj) {
   lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
@@ -144,29 +149,18 @@ void setColour(lv_obj_t *obj, lv_color_t c, uint32_t &cache) {
   lv_obj_set_style_text_color(obj, c, 0);
 }
 
-const char *ackText(uint8_t r) {
-  switch (r) {
-    case OHX_R_OK: return "ok";
-    case OHX_R_STALE: return "stale";
-    case OHX_R_AUTH: return "wrong key";
-    case OHX_R_DISABLED: return "disabled";
-    case OHX_R_MOVING: return "car moving";
-    case OHX_R_NO_HALDEX: return "no haldex";
-    case OHX_R_BUSY: return "busy";
-    case OHX_R_INVALID: return "invalid";
-    case OHX_R_UNSUPPORTED: return "unsupported";
-    case OHX_R_CTRL_OFF: return "control off";
-    case ohxnow::kAckNoLink: return "no link";
-    case ohxnow::kAckNoKey: return "no key";
-    case ohxnow::kAckNoReply: return "no reply";
-    default: return "send failed";
+const char *outcomeText(Outcome o) {
+  switch (o) {
+    case Outcome::Ok: return "ok";
+    case Outcome::NoChange: return "NO CHANGE";
+    default: return "NO CONNECTION";
   }
 }
 
-lv_color_t ackColour(uint8_t r) {
-  if (r == OHX_R_OK) return col_green();
-  if (r == ohxnow::kAckNoLink || r == ohxnow::kAckNoReply) return COL_DIM;
-  return col_red();
+lv_color_t outcomeColour(Outcome o) {
+  if (o == Outcome::Ok) return col_green();
+  if (o == Outcome::NoChange) return col_amber();
+  return COL_DIM;
 }
 
 // The line under the mode: the controller's answer for a few seconds after a
@@ -210,36 +204,47 @@ void applyOpacity() {
   }
 }
 
-// Has the controller answered? STALE means another sender (the dash, or the
-// controller's own page) spent the nonce first; the packet refills it every
-// 100 ms, so one silent second attempt usually wins and a second would just
-// race again.
-void resolveCommand(uint32_t now) {
+// Has the mode flag moved? A fresh status is also what refills the nonce, so
+// it doubles as the signal that another tap may send. The window only decides
+// when to stop waiting: the flag is the verdict, and a status that arrives
+// without it is NO CHANGE rather than a failure of the link.
+void resolveCommand(const ohxnow::Telemetry &t, const ohxnow::Stats &s,
+                    uint32_t now) {
   if (!g_cmd.pending) return;
 
-  const ohxnow::Ack a = ohxnow::lastAck();
-  if (a.valid && a.seq == ohxnow::lastSentSeq() && a.result != OHX_R_NONE) {
-    if (a.result == OHX_R_STALE && !g_cmd.retried &&
-        ohxnow::sendMode(g_cmd.want) == ohxnow::SendResult::Ok) {
-      g_cmd.retried = true;
-      g_cmd.sentMs = now;
-      return;
-    }
+  const bool live = s.raw > 0 && t.statusValid;
+  const bool fresh = s.statusPackets != g_cmd.sentPackets;
+  const uint32_t age = (uint32_t)(now - g_cmd.sentMs);
+
+  if (live && fresh && t.mode == g_cmd.want) {
     g_cmd.pending = false;
-    g_cmd.haveResult = true;
-    g_cmd.result = a.result;
-    g_cmd.resultMs = now;
-    Serial.printf("[haldex] mode %s: %s (ack after %lu ms)\n",
-                  kModeNames[g_cmd.want], ackText(a.result),
-                  (unsigned long)a.ageMs);
+    g_cmd.outcome = Outcome::Ok;
+    g_cmd.outcomeMs = now;
+    Serial.printf("[haldex] mode %s: ok (mode flag after %lu ms)\n",
+                  kModeNames[g_cmd.want], (unsigned long)age);
     return;
   }
-  if ((uint32_t)(now - g_cmd.sentMs) > kAckWaitMs) {
+
+  // Nothing is being broadcast, so there is no verdict to wait for.
+  if (!live) {
     g_cmd.pending = false;
-    g_cmd.haveResult = true;
-    g_cmd.result = ohxnow::kAckNoReply;
-    g_cmd.resultMs = now;
-    Serial.printf("[haldex] mode %s: no reply\n", kModeNames[g_cmd.want]);
+    g_cmd.outcome = Outcome::NoConnection;
+    g_cmd.outcomeMs = now;
+    Serial.printf("[haldex] mode %s: no connection\n", kModeNames[g_cmd.want]);
+    return;
+  }
+
+  if (age > kConfirmMs) {
+    g_cmd.pending = false;
+    g_cmd.outcome = fresh ? Outcome::NoChange : Outcome::NoConnection;
+    g_cmd.outcomeMs = now;
+    if (g_cmd.outcome == Outcome::NoChange) {
+      const char *still = t.mode < kModeCount ? kModeNames[t.mode] : "--";
+      Serial.printf("[haldex] mode %s: not confirmed, flag still %s\n",
+                    kModeNames[g_cmd.want], still);
+    } else {
+      Serial.printf("[haldex] mode %s: no connection\n", kModeNames[g_cmd.want]);
+    }
   }
 }
 
@@ -296,7 +301,7 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   const uint32_t now = millis();
   const bool live = s.raw > 0 && t.statusValid;
 
-  resolveCommand(now);
+  resolveCommand(t, s, now);
 
   g_standalone = t.standalone;
   g_modeShown = (live && t.mode < kModeCount) ? (int)t.mode : -1;
@@ -332,14 +337,19 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
     snprintf(buf, sizeof(buf), "%s: sending", kModeNames[g_cmd.want]);
     subLine(buf);
     subColour(col_amber());
-  } else if (g_cmd.haveResult && (uint32_t)(now - g_cmd.resultMs) <= kResultHoldMs) {
+  } else if (g_cmd.outcome != Outcome::None &&
+             (uint32_t)(now - g_cmd.outcomeMs) <= kResultHoldMs) {
     char buf[28];
-    snprintf(buf, sizeof(buf), "%s: %s", kModeNames[g_cmd.want],
-             ackText(g_cmd.result));
+    if (g_cmd.outcome == Outcome::NoConnection) {
+      snprintf(buf, sizeof(buf), "NO CONNECTION");
+    } else {
+      snprintf(buf, sizeof(buf), "%s: %s", kModeNames[g_cmd.want],
+               outcomeText(g_cmd.outcome));
+    }
     subLine(buf);
-    subColour(ackColour(g_cmd.result));
+    subColour(outcomeColour(g_cmd.outcome));
   } else if (!live) {
-    subLine("NO CONTROLLER");
+    subLine("NO CONNECTION");
     subColour(theme::dim());
   } else if (!t.ctrlAccept) {
     subLine("CONTROL OFF");
@@ -363,13 +373,18 @@ void onTap() {
   if (!g_ready) return;
 
   const uint32_t now = millis();
-  if (g_cmd.pending && (uint32_t)(now - g_cmd.sentMs) < kAckWaitMs) {
+  const ohxnow::Stats s = ohxnow::stats();
+
+  // The controller regenerates its nonce after it accepts a command, so a
+  // second tap before the next status would sign against a spent one. One
+  // request in flight is the whole guard; in practice it clears in ~100 ms.
+  if (g_cmd.pending && s.statusPackets == g_cmd.sentPackets) {
     Serial.println("[haldex] a request is already in flight");
     return;
   }
 
   // Step from what the glass shows, or from the request in flight if the last
-  // one has not been answered yet, so three quick taps move three modes.
+  // one has not been confirmed yet, so three quick taps move three modes.
   const int base = g_cmd.pending ? g_cmd.want : (g_modeShown >= 0 ? g_modeShown : 0);
   uint8_t want = (uint8_t)((base + 1) % kModeCount);
   // A standalone controller has no STOCK to fall back on: it answers a request
@@ -378,9 +393,10 @@ void onTap() {
 
   g_cmd.want = want;
   g_cmd.pending = true;
-  g_cmd.retried = false;
-  g_cmd.haveResult = false;
+  g_cmd.outcome = Outcome::None;
   g_cmd.sentMs = now;
+  // Taken before the send, so the status that answers it counts as new.
+  g_cmd.sentPackets = s.statusPackets;
 
   const ohxnow::SendResult r = ohxnow::sendMode(want);
   if (r == ohxnow::SendResult::Ok) {
@@ -388,22 +404,23 @@ void onTap() {
     return;
   }
 
+  // Nothing reached the air. The controller is still broadcasting, so the
+  // observable outcome is that the mode does not change; the reason is
+  // console detail, not a word the driver has to decode.
   g_cmd.pending = false;
-  g_cmd.haveResult = true;
-  g_cmd.resultMs = now;
+  g_cmd.outcome = (r == ohxnow::SendResult::NoStatus) ? Outcome::NoConnection
+                                                      : Outcome::NoChange;
+  g_cmd.outcomeMs = now;
   switch (r) {
     case ohxnow::SendResult::NoKey:
-      g_cmd.result = ohxnow::kAckNoKey;
       Serial.printf("[haldex] mode %s: controller needs a key, none stored\n",
                     kModeNames[want]);
       break;
     case ohxnow::SendResult::NoStatus:
-      g_cmd.result = ohxnow::kAckNoLink;
       Serial.printf("[haldex] mode %s: no fresh OHX_STATUS to send to\n",
                     kModeNames[want]);
       break;
     default:
-      g_cmd.result = ohxnow::kAckNoLink;
       Serial.printf("[haldex] mode %s: send failed\n", kModeNames[want]);
       break;
   }

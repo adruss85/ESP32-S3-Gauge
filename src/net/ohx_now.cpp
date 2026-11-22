@@ -146,17 +146,7 @@ uint8_t g_ctrlMac[6] = {};
 bool g_ctrlKnown = false;
 bool g_ctrlMacNew = false;   // log it once, from poll()
 uint32_t g_lastNonce = 0;
-uint8_t g_cmdSeq = 0;        // our own counter, echoed back as ackSeq
-volatile bool g_ackValid = false;
-volatile uint8_t g_ackResult = 0;
-volatile uint8_t g_ackSeq = 0;
-uint32_t g_ackMs = 0;
-// The controller reports the last two bytes of the MAC that sent the command,
-// and ESP-NOW sends from whichever interface the peer names. We send on STA,
-// but accepting either of this board's two MACs keeps the verdict visible if
-// that ever changes: the sequence number still has to be ours.
-uint8_t g_ownMacSta[6] = {};
-uint8_t g_ownMacAp[6] = {};
+uint8_t g_cmdSeq = 0;        // our counter; the protocol carries it, the echo is not read
 volatile bool g_ctrlKeyed = false;  // its AP has a password: sign or stay quiet
 
 // Upper bound for hopping. 13 with no AP; the softAP can lower it.
@@ -305,17 +295,11 @@ void handleStatus(const esp_now_recv_info_t *info, const uint8_t *data, int len)
     g_ctrlMacNew = true;
   }
 
-  // The verdict on our last command rides in this packet: ackSrc is the last
-  // two bytes of the MAC that sent it, ackSeq its counter and ackResult the
-  // answer. A match on all three means this is the answer to ours.
-  if (g_cmdSeq != 0 && st.ackSeq == g_cmdSeq &&
-      ((st.ackSrc[0] == g_ownMacSta[4] && st.ackSrc[1] == g_ownMacSta[5]) ||
-       (st.ackSrc[0] == g_ownMacAp[4] && st.ackSrc[1] == g_ownMacAp[5]))) {
-    g_ackResult = st.ackResult;
-    g_ackSeq = st.ackSeq;
-    g_ackMs = now;
-    g_ackValid = true;
-  }
+  // The command verdict is the mode byte in later status packets, not the
+  // ackSrc/ackSeq/ackResult fields. The header still carries those fields and
+  // the controller still fills them; this gauge does not read them, because
+  // in use they disagreed with the mode flag and the flag is the thing the
+  // driver is looking at.
   taskEXIT_CRITICAL(&g_mux);
 }
 
@@ -841,10 +825,8 @@ bool begin() {
   WiFi.disconnect(false, false);
   WiFi.setSleep(false);
 
-  // Both of this board's MACs: the controller echoes the last two bytes of the
-  // MAC that signed the command, and that is how an ack is recognised as ours.
-  WiFi.macAddress(g_ownMacSta);
-  WiFi.softAPmacAddress(g_ownMacAp);
+  // The MAC that sends a command is the one esp_now_send() reports; nothing
+  // here needs to remember it now that the verdict is the mode flag.
 
   // Start on the family fallback channel, then look for the anchor. The
   // channel has to be set before the async scan starts: esp_wifi_set_channel
@@ -969,9 +951,11 @@ bool takeModeEvent() {
 // peers of the same controller and a difference here would be a bug that only
 // shows up in one of them.
 //
-// Nothing is retried here. The controller regenerates its nonce after every
-// command it accepts, so a resend is a new command with a new signature; the
-// caller's STALE retry does that, once.
+// Nothing is retried here, and the caller does not retry either: one tap is
+// at most one frame. The controller regenerates its nonce after every command
+// it accepts, so a second send before the next status would reuse a spent
+// nonce. The caller therefore refuses a tap until a new status has arrived,
+// which is also the only feedback that the nonce is fresh again.
 SendResult sendMode(uint8_t mode) {
   if (mode > 5) return SendResult::Invalid;
   if (!g_enabled) return SendResult::NoStatus;
@@ -1032,35 +1016,13 @@ SendResult sendMode(uint8_t mode) {
     return SendResult::NoPeer;
   }
 
-  // This command is the one the next ack can be about.
-  taskENTER_CRITICAL(&g_mux);
-  g_ackValid = false;
-  taskEXIT_CRITICAL(&g_mux);
-
+  // This command is the one the next status can answer with a new mode.
   const esp_err_t serr = esp_now_send(target, (const uint8_t *)&c, sizeof(c));
   if (serr != ESP_OK) {
     Serial.printf("[haldex] send failed: %s\n", esp_err_to_name(serr));
     return SendResult::Radio;
   }
   return SendResult::Ok;
-}
-
-uint8_t lastSentSeq() {
-  taskENTER_CRITICAL(&g_mux);
-  const uint8_t seq = g_cmdSeq;
-  taskEXIT_CRITICAL(&g_mux);
-  return seq;
-}
-
-Ack lastAck() {
-  Ack a = {};
-  taskENTER_CRITICAL(&g_mux);
-  a.valid = g_ackValid;
-  a.result = g_ackResult;
-  a.seq = g_ackSeq;
-  a.ageMs = g_ackValid ? (uint32_t)(millis() - g_ackMs) : UINT32_MAX;
-  taskEXIT_CRITICAL(&g_mux);
-  return a;
 }
 
 Stats stats() {

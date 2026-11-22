@@ -119,8 +119,11 @@ bool takeModeEvent();
 //
 // The command is signed with HMAC-SHA256 keyed on the controller's AP
 // password, which is why that password is a stored setting. The controller
-// never answers directly: the verdict arrives in the ack fields of its next
-// status broadcast, so sendMode() succeeding only means "on the air".
+// never answers directly. The only verdict is the mode byte in its status
+// broadcasts: the request worked if that byte becomes the mode asked for.
+// The ackSrc/ackSeq/ackResult fields are not read here - they are a second
+// source of truth for the same fact, and in use they disagreed with the mode
+// flag (the mode changed while the ack match never landed).
 
 enum class SendResult : uint8_t {
   Ok = 0,
@@ -133,24 +136,5 @@ enum class SendResult : uint8_t {
 
 // Ask the controller for a Haldex mode (0 Stock .. 5 Expert).
 SendResult sendMode(uint8_t mode);
-
-// Sequence number of the last command this build put on the air (0 = none).
-uint8_t lastSentSeq();
-
-// Result codes that are ours, not the controller's.
-inline constexpr uint8_t kAckNoLink = 0xFE;  // nothing was sent
-inline constexpr uint8_t kAckNoKey = 0xFD;   // a key is needed and not stored
-inline constexpr uint8_t kAckNoReply = 0xFF; // sent, never answered
-
-struct Ack {
-  bool valid;       // a verdict for one of our commands has arrived
-  uint8_t result;   // ohxResult_t, or kAckNoLink / kAckNoKey / kAckNoReply
-  uint8_t seq;      // the command it is about
-  uint32_t ageMs;   // since the verdict arrived
-};
-
-// The last verdict heard. valid stays true once set, so the caller decides how
-// long to show it; a new command does not clear it.
-Ack lastAck();
 
 }  // namespace ohxnow

@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 22 Nov 2026, firmware **0.7.0**.
+Last updated: 22 Nov 2026, firmware **0.7.1**.
 
 > **Hardware state.** The gauge runs on a **Waveshare ESP32-S3-Touch-AMOLED-1.75**
 > (466x466 CO5300 AMOLED, CST9217 touch). The 1.85 unit this firmware was
@@ -170,33 +170,44 @@ Last updated: 22 Nov 2026, firmware **0.7.0**.
   Build sizes: flash **1,463,835 B (22.3%)**, static RAM **118,960 B (36.3%)**;
   headless `esp32dev` 955,412 B (72.9%) flash / 48,432 B (14.8%) RAM.
 
+## Reported by the owner
+
+* **The mode request works (0.7.0, 22 Nov 2026).** A tap on the Haldex face
+  sends the signed `OHX_C_MODE` and the controller changes mode, so the nonce,
+  signature, unicast peer and the stored key are all correct. The verdict path
+  was the part that failed: the controller's `ackSrc`/`ackSeq`/`ackResult` echo
+  never matched on this unit, so the sub-line said `no reply` after a mode
+  change that had already happened. 0.7.1 stops reading the ack fields and
+  judges the request by the `mode` byte in the next status instead.
+
 ## Not verified yet
 
-* **0.7.0 has not been on hardware at all.** The Haldex face, the new touch
-  classifier and the mode request were built and reviewed, not run. In
-  particular:
-  - **No frame has been sent.** `sendMode()` has never put an `OhxCommand` on
-    the air from this board, so the signature, the unicast peer, the
-    acknowledgement match (`ackSrc`'s last two bytes plus `ackSeq`) and the
-    single `STALE` retry are all unexercised. The first thing to watch is
-    `[haldex] mode -> FWD (sent)` followed by `[haldex] mode FWD: ok (ack
-    after N ms)` — an ack that never lands while the controller's own page
-    shows the mode changed would mean the ack MAC match is wrong, not that
-    the send failed.
-  - **The key never travels.** Confirm `/ohxkey` stores it (`[set] controller
-    key stored (N chars)`), that a reboot still signs (`ok`, not `wrong key`),
-    and that neither the page nor the console ever prints it.
-  - **The touch classifier's new numbers** (12 px slop, 550 ms hold) are
-    guesses from the geometry, not measurements. The check that matters: a
-    swipe must never step the scheme, and a hold must be repeatable without
-    moving the finger.
-  - **The Haldex layout has not been photographed.** `-DGAUGE_CAPTURE_DRIVE=1`
-    exists for exactly this. The geometry is reasoned from the font metrics
-    (montserrat_48 is 52/9, montserrat_20 is 22/4, so the value boxes sit
-    25 px above their captions), not seen on the glass.
-  - **Drive as a stored mode.** `settings::setMode()` used to reject anything
-    above 4, so the Haldex face could not survive a reboot. That bound is now
-    5; confirm a board left on the Haldex face comes back to it.
+* **0.7.1's verdict vocabulary is compile-verified only.** 0.7.0's send and
+  the mode change are confirmed in use (above); the new judgement has
+  not been seen on hardware. On the board: a tap must log
+  `[haldex] mode -> FWD (sent)` then `[haldex] mode FWD: ok (mode flag after
+  N ms)` and the big mode label must change; powering the controller off and
+  tapping must give `NO CONNECTION`; a request the controller ignores (wrong
+  key, control off, or the dash spending the nonce first) must give
+  `NO CHANGE` and `not confirmed, flag still <mode>` on the console. Two taps
+  inside one 100 ms packet period must refuse the second as
+  `a request is already in flight`, not send it stale.
+* **The key never travels.** Confirm `/ohxkey` stores it (`[set] controller
+  key stored (N chars)`), that a reboot still signs, and that neither the page
+  nor the console ever prints it. With the ack fields gone, a wrong key now
+  reads as `NO CHANGE` on the glass and `not confirmed` on the console - the
+  console line is the diagnosis, not the mode line.
+* **The touch classifier's new numbers** (12 px slop, 550 ms hold) are
+  guesses from the geometry, not measurements. The check that matters: a
+  swipe must never step the scheme, and a hold must be repeatable without
+  moving the finger.
+* **The Haldex layout has not been photographed.** `-DGAUGE_CAPTURE_DRIVE=1`
+  exists for exactly this. The geometry is reasoned from the font metrics
+  (montserrat_48 is 52/9, montserrat_20 is 22/4, so the value boxes sit
+  25 px above their captions), not seen on the glass.
+* **Drive as a stored mode.** `settings::setMode()` used to reject anything
+  above 4, so the Haldex face could not survive a reboot. That bound is now
+  5; confirm a board left on the Haldex face comes back to it.
 - **0.6.3 has no recorded hardware verification.** This entry was written from
   the release build (clean, `2f61f3b`); no bench log for these changes exists
   in this file, so treat them as compile-verified only. What
@@ -310,6 +321,13 @@ drivetrain drawing's thirty-odd objects, which it also gave back), the
 the `/ohxkey` route. Headless `esp32dev` is 956,968 B (73.0%) flash and
 48,536 B (14.8%) RAM. Build sizes at 0.7.0: flash **1,467,259 B (22.4%)**,
 static RAM **119,096 B (36.3%)**.
+
+0.7.1 gave back **612 B** of flash and **8 B** of static RAM (1,466,647 B /
+119,088 B): the ack matcher, its result table, the STALE retry and the two
+stored MACs are gone; the mode-flag verdict is a counter comparison and one
+byte. Headless `esp32dev` is 956,788 B (73.0%) flash and 48,520 B (14.8%)
+RAM. Build sizes at 0.7.1: flash **1,466,647 B (22.4%)**, static RAM
+**119,088 B (36.3%)**.
 
 ## How this was checked
 

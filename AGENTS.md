@@ -305,7 +305,7 @@ invalidated when something changes. Do not go back to per-dot objects.
 | OTA | `curl -F firmware=@.pio/build/esp32s3/firmware.bin http://192.168.4.1/update`, then confirm the boot log and the new build |
 | BOOT key | Short press: `[ui] accent <name>` once. 700 ms hold: `[ui] mode g-meter`; release must not also step the scheme |
 | Touch | Hold (550 ms, still): `[ui] touch hold` + one scheme step, and the release must add nothing. Tap on the Haldex screen: `[ui] touch tap` + `[haldex] mode -> ...`; on any other screen `[ui] touch tap (ignored)`. A flick-and-return and a press that wanders >12 px must produce no tap at all. Swipe left/right: `[ui] touch swipe left|right` + one 280 ms slide. `t` logs the mapped point, which is how the mirror flags are checked: touch a known corner and read it |
-| Haldex face | Capture with `-DGAUGE_CAPTURE_DRIVE=1`; on the glass, `LOCK REQ`/`LOCK ACT` must show `--` with the controller off and real percentages with it on. Tap → `[haldex] mode -> <name> (sent)`, then `[haldex] mode <name>: ok (ack after N ms)`, and the mode line must change on the next packet. A wrong key must read `wrong key`, not `no reply` |
+| Haldex face | Capture with `-DGAUGE_CAPTURE_DRIVE=1`; on the glass, `LOCK REQ`/`LOCK ACT` must show `--` with the controller off and real percentages with it on. Tap → `[haldex] mode -> <name> (sent)`, then `[haldex] mode <name>: ok (mode flag after N ms)`, and the mode line must change on the next packet. With the controller off, a tap reads `NO CONNECTION`; a request the controller ignores reads `NO CHANGE` and `not confirmed, flag still <mode>` on the console |
 | Mode request | `[haldex] controller <mac>, key required|not required` once per controller. With the AP passworded and nothing stored: `[haldex] mode <name>: controller needs a key, none stored`, and no frame on the air (watch the controller's own page). With `/ohxkey` clearing the field: `[set] controller key cleared` |
 | Cruise stalk | Cancel+Down: `[ui] cruise combo` + one scheme step. Down long alone: `[ui] cruise mode` + one screen switch |
 | G-meter | At rest `g` prints `avg=0.00 valid=1` and `/api/status` has `g100:0`; tilt the board to see the blob move; acceleration must move it up, braking down. In a car, use Flip if reversed |
@@ -434,20 +434,23 @@ invalidated when something changes. Do not go back to per-dot objects.
   newest status, so a command is single-use; the controller regenerates it
   after every command it accepts. The send is a unicast to the MAC that
   broadcast that status, added as an ESP-NOW peer on `WIFI_IF_STA` with
-  `channel = 0`. No retries here — `drive_ui` retries once, silently, and only
-  on `OHX_R_STALE` (the dash or the controller's page spending the nonce
-  first). The verdict never comes back unicast: it rides in the next
-  `OHX_STATUS`'s `ackSrc[2]`/`ackSeq`/`ackResult`, matched on our own last two
-  MAC bytes and our own sequence number. Reference implementation:
-  `OpenHaldex-S3-Dash`'s `ohx_now.cpp::sendMode()`; the two must not drift.
-  There is **no lock-duty opcode** in v1 — `lockTarget` is read-only — so a
-  lock request cannot be commanded from either device.
+  `channel = 0`. One tap is at most one frame: no retry here and none in
+  `drive_ui` (0.7.1 removed the `OHX_R_STALE` retry), because a resend before
+  the next status would reuse a spent nonce. A second tap is refused until a
+  fresh status arrives, which is what refills it. **The verdict is the `mode`
+  byte in the next status, not the `ackSrc`/`ackSeq`/`ackResult` echo**
+  (0.7.1): in use the mode changed while the ack match never landed, and
+  the flag is what the driver reads. `sendMode()` still matches
+  `OpenHaldex-S3-Dash`'s; only the verdict differs. There is **no lock-duty
+  opcode** in v1 — `lockTarget` is read-only — so a lock request cannot be
+  commanded from either device.
 * Requirement for a send: a status within the last **2000 ms** and a stored
   key if the controller's flags say `OHX_F2_KEY`. A keyed controller with an
-  empty key is refused locally (`no key`) rather than signed wrongly.
-  `OHX_F2_CONTROL` is not a gate: the request goes out and the controller's
-  `disabled` answer is what the driver sees, because a wrong local decode of
-  that flag would otherwise make the control silently dead.
+  empty key is refused locally rather than signed wrongly; the glass shows
+  `NO CHANGE` and the console says why. `OHX_F2_CONTROL` is not a gate: the
+  request goes out, because a wrong local decode of that flag would otherwise
+  make the control silently dead; the mode flag simply does not move if the
+  controller refuses, and the face shows `NO CHANGE`.
 * The Haldex face draws the request in the scheme's text colour and the actual
   engagement in cyan `0x22D3EE` — the same value `OpenHaldex-S3-Dash` uses, so
   the two screens cannot disagree about which number is which.

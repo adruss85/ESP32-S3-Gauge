@@ -164,8 +164,8 @@ void loop() {
       dashboard::toggleMode("console");
     } else if (key == 'h') {
       Serial.read();
-      // The same function the touch tap calls, so a mode request and its ack
-      // can be exercised from the console with no finger on the glass.
+      // The same function the touch tap calls, so a mode request and its
+      // verdict can be exercised from the console with no finger on the glass.
       if (dashboard::mode() != dashboard::Mode::Drive) {
         dashboard::setMode(dashboard::Mode::Drive, false, "console");
       }

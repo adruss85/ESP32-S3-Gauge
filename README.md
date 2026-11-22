@@ -170,21 +170,26 @@ that could not be read on the glass in a car.
 order: `STOCK → FWD → 50:50 → 60:40 → 75:25 → EXPERT → STOCK`. A standalone
 controller has no `STOCK` to fall back on, so that step is skipped. The
 sub-line shows what happened: `60:40: sending` in amber, then `60:40: ok` in
-green or the controller's refusal — `wrong key`, `disabled`, `car moving`,
-`control off`, `no haldex`, `no reply` — for five seconds. One request is in
-flight at a time; a stale nonce (another sender got there first) earns exactly
-one silent retry.
+green when the controller's own mode byte becomes the mode asked for. If the
+controller is broadcasting but its flag does not move, the line reads
+`60:40: NO CHANGE` for five seconds; if nothing is being broadcast, it reads
+`NO CONNECTION`. One request is in flight at a time: the controller's nonce
+is single-use, so a second tap waits for the next status packet rather than
+signing against a spent nonce. There is no automatic retry.
 
 This is the only thing the gauge transmits. The request is `OHX_C_MODE` over
 ESP-NOW, unicast to the controller that is broadcasting `OHX_STATUS`, signed
 with HMAC-SHA256 keyed on **that controller's AP password** — which is why
 there is a password field on the web page. An open AP means an empty key,
-which is still a key. The controller never replies directly: its verdict
-arrives in the `ackSrc`/`ackSeq`/`ackResult` fields of the next status
-broadcast, which is what the sub-line reads.
+which is still a key. The controller never replies directly: the verdict is
+the `mode` byte in its next status broadcast, which is what the sub-line
+reads. The `ackSrc`/`ackSeq`/`ackResult` echo is not read — in use it
+disagreed with the flag, and the flag is the thing on the glass.
 
-If the controller's AP is passworded and no key is stored, a tap sends nothing
-and says `no key` rather than firing a signature that would be rejected.
+If the controller's AP is passworded and no key is stored, a tap sends nothing;
+the glass reads `NO CHANGE` and the console says `controller needs a key, none
+stored`. A wrong key looks the same on the glass, by design: the mode does not
+move, and the console line is the diagnosis.
 
 > **The open-AP case.** With no AP password the key is the empty string and the
 > nonce is broadcast, so anyone in range can compute a valid signature. That is

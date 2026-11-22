@@ -20,7 +20,8 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s);
 
 // A tap on this face: ask the controller for the next Haldex mode. Sends
 // nothing unless a fresh OHX_STATUS has been heard and the controller says it
-// accepts commands; the result is drawn in the sub-line.
+// accepts commands. The verdict is the mode byte in the next status, drawn in
+// the sub-line as ok, NO CHANGE or NO CONNECTION.
 void onTap();
 
 void setScheme(theme::Scheme s, bool persist);
