@@ -25,20 +25,65 @@ jobs:
       - name: Build esp32s3 (display)
         run: pio run -e esp32s3
 
+      # Compile check for the bench listener; it is not a release asset.
       - name: Build esp32dev (headless)
         run: pio run -e esp32dev
 
-      - name: Upload firmware.bin (esp32s3)
-        uses: softprops/action-gh-release@v2
-        with:
-          files: .pio/build/esp32s3/firmware.bin
-          body: |
-            ESP32-S3 Gauge firmware for Waveshare ESP32-S3-Touch-AMOLED-1.75
-            - OTA: `curl -F "firmware=@firmware.bin" http://192.168.4.1/update`
-          name: firmware-esp32s3.bin
+      # Assets follow the 0.6.3 convention: ESP32-S3-Gauge-<version>.bin, with
+      # no leading "v". Read the version from the source of truth and refuse a
+      # tag that disagrees, so a release cannot be published under a version
+      # its firmware does not report.
+      - name: Derive version
+        id: ver
+        run: |
+          set -eu
+          version=$(sed -n 's/^#define OHX_GAUGE_VERSION "\(.*\)"/\1/p' include/version.h)
+          test -n "$version"
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$tag" != "$version" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match version.h ${version}" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Upload firmware.bin (esp32dev)
+      # The factory image is the only one that flashes onto a bare board: the
+      # app-only firmware.bin sits at 0x10000 behind a bootloader. Fail loudly
+      # here rather than publish a release with nothing flashable in it.
+      - name: Check flashable artifacts
+        run: |
+          set -eu
+          test -f .pio/build/esp32s3/firmware.factory.bin
+          test -f .pio/build/esp32s3/firmware.bin
+          # 0x0009 in the extended header = ESP32-S3; 0x0000 is a plain ESP32.
+          chip=$(od -An -tx1 -j12 -N2 .pio/build/esp32s3/firmware.bin | tr -d ' \n')
+          echo "esp32s3 image chip id: $chip"
+          test "$chip" = "0900"
+
+      # One release step, one asset per build. softprops defaults to
+      # overwrite_files: true, so two steps both uploading "firmware.bin"
+      # silently replace each other - that is how v0.6.4 shipped the esp32dev
+      # image under the S3's name. Rename each asset explicitly.
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: .pio/build/esp32dev/firmware.bin
-          name: firmware-esp32dev.bin
+          fail_on_unmatched_files: true
+          files: |
+            .pio/build/esp32s3/firmware.bin#ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.bin
+            .pio/build/esp32s3/firmware.factory.bin#ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.factory.bin
+          body: |
+            ESP32-S3 Gauge firmware for Waveshare ESP32-S3-Touch-AMOLED-1.75.
+
+            | Asset | Use |
+            |---|---|
+            | `ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.bin` | OTA update, or app at `0x10000` |
+            | `ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.factory.bin` | Whole flash at `0x0` (first flash or recovery) |
+
+            OTA over the gauge's own AP (join `CANv-gauge` first):
+            ```
+            curl -F "firmware=@ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.bin" http://192.168.4.1/update
+            ```
+
+            First flash or recovery:
+            ```
+            esptool.py --chip esp32s3 write_flash 0x0 ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.factory.bin
+            ```
