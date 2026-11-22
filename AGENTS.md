@@ -118,7 +118,11 @@ curl -F "firmware=@.pio/build/esp32s3/firmware.bin" http://192.168.4.1/update
   speed gate, zero), `boot_button_test.cpp` (short/long/bounce) and
   `gesture_test.cpp` (touch tap/hold/swipe classification, including the
   flick that must stay silent). Build commands are at the top of each file.
-  They do not touch hardware.
+  They do not touch hardware. `tools/sim/` is the same idea for the glass: it
+  compiles the real UI sources against real LVGL and writes a PPM per screen,
+  which is where `assets/screen-*.png` and `assets/gauge-schemes.png` come
+  from. It is a render, not a photograph - byte order, the column gap and
+  brightness still need the panel.
 * After a build, report the RAM and flash lines (see Budgets).
 
 ### Capturing the glass without a camera
@@ -292,6 +296,7 @@ invalidated when something changes. Do not go back to per-dot objects.
 | Boot banner / version | `include/version.h` |
 | Board pin map | `include/board_config.h` |
 | Frame capture | `GAUGE_CAPTURE` in `src/main.cpp`, `tools/capture_frame.py` |
+| Screen renders (no board) | `tools/sim/` - `make -C tools/sim`, `render`, `preview.py` |
 | Host math/button checks | `tools/gmeter_test.cpp`, `tools/boot_button_test.cpp`, `tools/host/` |
 
 ## How to verify a change

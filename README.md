@@ -25,7 +25,7 @@ does not touch the car's network.
 > This repository is AI-generated and human-tested on one board. It is not
 > security-audited. Read the code before you flash it.
 
-![The gauge in the Midnight scheme](assets/gauge-preview.png)
+![The gauge in the Midnight scheme](assets/screen-boost.png)
 
 ## What it shows
 
@@ -69,6 +69,27 @@ does not touch the car's network.
 - Unknown values draw `--`, never a fake zero. A genuine `0` draws `0`.
 
 ![All seven colour schemes](assets/gauge-schemes.png)
+
+## Screens
+
+Six faces share the glass, plus the boot screen. A 700 ms BOOT hold, a
+horizontal swipe, the console `m` key or the setup page moves between them; a
+short BOOT press, a 550 ms hold on the glass or Cancel+Down on the cruise
+stalk steps the colour scheme.
+
+These are host renders of the current sources in the Midnight scheme
+(`tools/sim`, see [Rendering without the board](#rendering-without-the-board)),
+not photographs of the panel.
+
+| Screen | What it draws |
+|---|---|
+| ![Boost](assets/screen-boost.png) | **Boost** — the default face: the 270° arc, the 96 px value, `BOOST PSI` and the intake air temperature. |
+| ![Oil temperature](assets/screen-oil-temp.png) | **Oil temperature** — `Cluster_2` (`0x420`) byte 3, a 40–120 °C arc, whole degrees because that is all the bus sends. |
+| ![Oil pressure](assets/screen-oil-pressure.png) | **Oil pressure** — `Engine_7` (`0x588`) on a patched ME7, 0–145 PSI with a 0.1 PSI value. |
+| ![Coolant](assets/screen-coolant.png) | **Coolant** — `Cluster_2` (`0x420`) byte 4, a 40–120 °C arc. |
+| ![G-meter](assets/screen-gmeter.png) | **G-meter** — the blob, its 1 s fading tail and the two-axis average, all from the local QMI8658. |
+| ![Haldex](assets/screen-haldex.png) | **Haldex** — mode in force, `LOCK REQ`, `LOCK ACT` and the coupling state. A tap asks the controller for the next mode. |
+| ![Boot screen](assets/screen-splash.png) | **Boot** — the CANvas splash with the three-second loading rule at 1.4 s. |
 
 ## Hardware
 
@@ -401,6 +422,30 @@ PLATFORMIO_BUILD_FLAGS="-DGAUGE_CAPTURE=1 -DGAUGE_CAPTURE_SPLASH=1" \
 ./.venv/bin/python tools/capture_frame.py /dev/ttyACM0 /tmp/splash 1
 ```
 
+### Rendering without the board
+
+`tools/sim` draws the same screens on a PC. It compiles the real UI sources
+(`theme`, `gauge_ui`, `oil_ui`, `oil_press_ui`, `coolant_ui`, `drive_ui`,
+`gmeter_ui`, `splash` and the 96 px face) against LVGL 9.3 with
+`include/lv_conf.h` used verbatim, drives them with the capture build's fixed
+reading, and writes one 466x466 PPM per screen. Every screen image on this
+page comes from it.
+
+```bash
+make -C tools/sim
+./tools/sim/build/render /tmp/gauge-render
+./tools/sim/preview.py /tmp/gauge-render assets
+```
+
+LVGL comes from the PlatformIO libdeps checkout, so run a build once first; with
+no `.pio/` it downloads 9.3.0 into `tools/sim/build/lvgl`. The G-meter sweep and
+the splash rule are stepped on a harness clock, which is why the renderer needs
+no hardware and no sleeping.
+
+It is a render, not a photograph: it cannot show a wrong byte order, a wrong
+column gap or a wrong brightness, because those belong to the panel. Those still
+need an eye on the glass.
+
 Host-only checks (no hardware) live in `tools/`:
 
 ```bash
@@ -421,7 +466,8 @@ classifier at the 15 ms poll rate: a still press is a tap, an 8 px jitter is
 still a tap, a 550 ms dwell is a hold that fires while the finger is down and
 whose release is swallowed, a 60 px drag is a swipe, and a flick that wanders
 past 12 px — including one that comes back to where it started — is nothing at
-all. None of them touches the panel, the IMU or the car.
+all. None of them touches the panel, the IMU or the car, and `tools/sim` only
+renders what the UI code draws.
 
 ## Repository layout
 

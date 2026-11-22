@@ -12,6 +12,8 @@
 __pycache__/
 *.pyc
 compile_commands.json
+# host screen renderer's LVGL checkout and objects
+tools/sim/build/
 
 # --- capture output
 *.ppm
