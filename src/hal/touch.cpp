@@ -1,5 +1,5 @@
 // =====================================================================
-// touch.cpp - CST9217 driver, LVGL pointer and the gauge's two gestures
+// touch.cpp - CST9217 driver, LVGL pointer and the gauge's gestures
 //
 // Protocol and geometry follow Waveshare's SensorLib TouchDrvCST92xx and
 // their BSP's touch configuration for this board. The short version:
@@ -17,6 +17,10 @@
 // short I2C transfers at up to 66 Hz is about 0.4 ms each - cheaper than a
 // mis-timed interrupt, and the IMU shares the same bus without contention
 // because both run from loop().
+//
+// The gestures are told apart by how still the finger was, not by how long
+// it was down. That comparison lives in gesture.cpp, which the host test
+// drives; this file only samples the controller and feeds it.
 // =====================================================================
 #include "hal/touch.h"
 
@@ -36,10 +40,6 @@ constexpr uint8_t kAck = 0xAB;
 constexpr size_t kReportBytes = 5 * 2 + 5;  // two fingers + header + ack
 
 constexpr uint32_t kPollMs = 15;
-constexpr uint32_t kTapMaxMs = 450;      // a tap is short...
-constexpr int kTapMaxMovePx = 24;        // ...and stays put
-constexpr int kSwipeMinPx = 46;          // 10% of the glass
-constexpr uint32_t kReleaseGuardMs = 120; // swallow a double report
 
 bool g_ready = false;
 uint16_t g_resX = LCD_H_RES;
@@ -55,11 +55,7 @@ uint16_t g_rawX = 0;
 uint16_t g_rawY = 0;
 
 // Press tracking for the gesture classifier.
-bool g_gestureArmed = false;
-uint16_t g_startX = 0;
-uint16_t g_startY = 0;
-uint32_t g_startMs = 0;
-uint32_t g_lastReleaseMs = 0;
+gesture::Tracker g_tracker;
 
 bool writeBytes(const uint8_t *buf, size_t len) {
   Wire.beginTransmission(BOARD_TOUCH_ADDR);
@@ -147,22 +143,6 @@ bool readPoint() {
   return true;
 }
 
-void classify(uint32_t now) {
-  const int dx = (int)g_x - (int)g_startX;
-  const int dy = (int)g_y - (int)g_startY;
-  const int adx = dx < 0 ? -dx : dx;
-  const int ady = dy < 0 ? -dy : dy;
-
-  if (adx >= kSwipeMinPx && adx > ady) {
-    emit(dx < 0 ? Gesture::SwipeLeft : Gesture::SwipeRight);
-    return;
-  }
-  if ((uint32_t)(now - g_startMs) <= kTapMaxMs && adx <= kTapMaxMovePx &&
-      ady <= kTapMaxMovePx) {
-    emit(Gesture::Tap);
-  }
-}
-
 }  // namespace
 
 bool begin() {
@@ -213,7 +193,7 @@ bool begin() {
 
   g_lastPollMs = millis();
   g_ready = true;
-  Serial.printf("[touch] CST92%02X at 0x%02X, %ux%u, tap = scheme, swipe = screen\n",
+  Serial.printf("[touch] CST92%02X at 0x%02X, %ux%u, hold = scheme, tap = haldex mode, swipe = screen\n",
                 (unsigned)(chip & 0xFF), BOARD_TOUCH_ADDR, (unsigned)g_resX,
                 (unsigned)g_resY);
   return true;
@@ -227,23 +207,7 @@ void poll() {
   g_lastPollMs = now;
 
   const bool down = readPoint();
-
-  if (down && !g_gestureArmed) {
-    // A press that starts within the release guard is the tail of the last
-    // gesture, not a new one.
-    if ((uint32_t)(now - g_lastReleaseMs) < kReleaseGuardMs) return;
-    g_gestureArmed = true;
-    g_startX = g_x;
-    g_startY = g_y;
-    g_startMs = now;
-    return;
-  }
-
-  if (!down && g_gestureArmed) {
-    g_gestureArmed = false;
-    g_lastReleaseMs = now;
-    classify(now);
-  }
+  emit(g_tracker.update(down, (int)g_x, (int)g_y, now));
 }
 
 void setHandler(void (*fn)(Gesture)) { g_handler = fn; }

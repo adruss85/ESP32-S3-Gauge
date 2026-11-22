@@ -12,9 +12,11 @@
 //   * The page's requests add to the loop's work. The JSON is built once a
 //     second when the page is open and not at all when it is closed.
 //
-// No request can change the wire protocol or start a transmission; the only
-// actions are the stored display settings, the G-meter zero and the OTA slot
-// that is not running.
+// No request can change the wire protocol. The page can change the stored
+// display settings, the G-meter zero, the controller's access-point password
+// (which signs a mode request) and the OTA slot that is not running. The one
+// thing that puts a Haldex command on the air is a tap on the drive face;
+// this page has no button for it, and should not grow one.
 // =====================================================================
 #include "net/gauge_web.h"
 
@@ -131,9 +133,10 @@ input[type=file]{font-size:13px;color:#b9c4d0;max-width:100%}
 <div class=row>
 <label><input type=radio name=mode value=0> Boost gauge</label>
 <label><input type=radio name=mode value=1> Oil temp</label>
-<label><input type=radio name=mode value=2> G-meter</label>
+<label><input type=radio name=mode value=2> Oil pressure</label>
 <label><input type=radio name=mode value=3> Coolant</label>
 <label><input type=radio name=mode value=4> G-meter</label>
+<label><input type=radio name=mode value=5> Haldex</label>
 </div>
 <div class=row style="margin-top:10px">
 <label>Mount <select id=mount>
@@ -148,6 +151,17 @@ input[type=file]{font-size:13px;color:#b9c4d0;max-width:100%}
 <p class=sub id=gmsg></p>
 </div>
 
+<h2>Haldex</h2>
+<div class=card><form id=ckey class=row>
+<label>Controller AP password <input id=ck type=password maxlength=63
+autocomplete=off spellcheck=false></label>
+<button>Save</button></form>
+<p class=sub>A tap on the Haldex screen asks the controller for the next mode,
+and that request is signed with HMAC-SHA256 keyed on this password. Leave it
+empty if the controller's access point has no password. It is stored on the
+gauge, never printed to the console and never sent to this page.</p>
+<p class=sub id=ckmsg></p></div>
+
 <h2>Firmware</h2>
 <div class=card><form id=ota method=post action=/update enctype=multipart/form-data>
 <input type=file name=firmware accept=.bin required><br>
@@ -160,10 +174,12 @@ slot and reboots; the image it is running is never overwritten.</p></div>
 <script>
 var N=["Midnight","Orange","Green","Blue","Purple","White","Red"],
     C=["#22c55e","#f59e0b","#22c55e","#3b82f6","#a855f7","#7c8894","#ef4444"],
+    M=["STOCK","FWD","50:50","60:40","75:25","EXPERT"],
     busy=false,mountTouched=false;
 function $(id){return document.getElementById(id)}
 function msg(id,ok,text){$(id).innerHTML='<span class='+(ok?"ok":"bad")+'>'+text+'</span>'}
 function val(x){return x===null?"--":(x/10).toFixed(1)}
+function valw(x){return x===null?"--":(x/10).toFixed(0)}  // oil °C: whole degrees on the bus
 function valg(x){return x===null?"--":(x/100).toFixed(2)}
 async function send(url,box){
   busy=true;
@@ -215,6 +231,11 @@ document.addEventListener("DOMContentLoaded",function(){
     e.preventDefault();
     send("/gzero","gmsg");
   };
+  $("ckey").onsubmit=function(e){
+    e.preventDefault();
+    send("/ohxkey?k="+encodeURIComponent($("ck").value),"ckmsg");
+    $("ck").value="";
+  };
   tick();
 });
 async function tick(){
@@ -242,9 +263,13 @@ async function tick(){
     $("live").textContent=
       "boost   "+val(s.boost10)+" psi"+(s.boost10===null?"  (no OHX_STATUS)":"")+
       "\nIAT     "+val(s.iat10)+" \u00b0C"+(s.iat10===null?"  (no Engine_3)":"")+
-      "\nOil    "+val(s.oil10)+" \u00b0C"+(s.oil10===null?"  (no Cluster_2)":"")+
+      "\nOil    "+valw(s.oil10)+" \u00b0C"+(s.oil10===null?"  (no Cluster_2)":"")+
       "\nOilP   "+val(s.oilp10)+" psi"+(s.oilp10===null?"  (no Engine_7)":"")+
       "\nCool   "+val(s.coolant10)+" \u00b0C"+(s.coolant10===null?"  (no Cluster_2)":"")+
+      "\nHaldex "+(s.hmode===null?"--":M[s.hmode])+
+        " \u00b7 req "+(s.lockReq===null?"--":s.lockReq+"%")+
+        " \u00b7 act "+(s.lockAct===null?"--":s.lockAct+"%")+
+        (s.ctrl===false?" \u00b7 control off":"")+
       "\nOil scale "+(s.omin10/10).toFixed(1)+".."+(s.omax10/10).toFixed(1)+" \u00b0C"+
       "\nOilP scale "+(s.opmin10/10).toFixed(1)+".."+(s.opmax10/10).toFixed(1)+" psi"+
       "\nCool scale "+(s.cmin10/10).toFixed(1)+".."+(s.cmax10/10).toFixed(1)+" \u00b0C"+
@@ -332,11 +357,30 @@ void handleStatus() {
     snprintf(glat, sizeof(glat), "%d", (int)lroundf(g.lateral * 100.0f));
   }
 
-  char buf[512];
+  // The Haldex face's three numbers, and whether the controller would take a
+  // mode request at all. Only while the status is fresh, like everything else
+  // here: a stale lock request is not a request.
+  char hmode[8] = "null";
+  char lockReq[8] = "null";
+  char lockAct[8] = "null";
+  bool ctrl = false;
+  if (t.statusValid) {
+    ctrl = t.ctrlAccept;
+    if (t.mode < 6) snprintf(hmode, sizeof(hmode), "%u", (unsigned)t.mode);
+    if (t.lockTargetValid) {
+      snprintf(lockReq, sizeof(lockReq), "%u", (unsigned)t.lockTarget);
+    }
+    if (t.lockActualValid) {
+      snprintf(lockAct, sizeof(lockAct), "%u", (unsigned)t.lockActual);
+    }
+  }
+
+  char buf[640];
   snprintf(buf, sizeof(buf),
            "{\"fw\":\"%s\",\"scheme\":%u,\"min10\":%d,\"max10\":%d,"
            "\"mode\":%u,\"mount\":%u,\"mres\":%u,\"flip\":%u,"
            "\"boost10\":%s,\"iat10\":%s,\"oil10\":%s,\"oilp10\":%s,\"coolant10\":%s,\"g100\":%s,\"gv100\":%s,\"gl100\":%s,"
+           "\"hmode\":%s,\"lockReq\":%s,\"lockAct\":%s,\"ctrl\":%s,"
            "\"omin10\":%d,\"omax10\":%d,\"opmin10\":%d,\"opmax10\":%d,\"cmin10\":%d,\"cmax10\":%d,"
            "\"ch\":%u,\"rssi\":%d,"
            "\"pps\":%.1f,\"ohx\":%lu,\"cann\":%lu,\"clients\":%u,"
@@ -344,6 +388,7 @@ void handleStatus() {
            config::kVersion, (unsigned)v.scheme, (int)v.min10, (int)v.max10,
            (unsigned)v.mode, (unsigned)v.mount, (unsigned)gmeter::mount(),
            (unsigned)v.gflip, boost, iat, oil, op, ct, gavg, gvert, glat,
+           hmode, lockReq, lockAct, ctrl ? "true" : "false",
            (int)v.omin10, (int)v.omax10,
            (int)v.omin10p, (int)v.omax10p,
            (int)v.cmin10, (int)v.cmax10,
@@ -352,6 +397,25 @@ void handleStatus() {
            (unsigned)WiFi.softAPgetStationNum(),
            (unsigned long)ESP.getFreeHeap());
   sendJson(200, buf);
+}
+
+void handleControllerKey() {
+  if (!g_server.hasArg("k")) {
+    reject("missing k");
+    return;
+  }
+  const String key = g_server.arg("k");
+  if (key.length() > settings::kControllerKeyMax) {
+    reject("key longer than 63 characters");
+    return;
+  }
+  // The reply never echoes the key, and the console only ever sees whether
+  // one is stored.
+  if (!settings::setControllerKey(key.c_str())) {
+    reject("key not stored");
+    return;
+  }
+  sendJson(200, "{\"ok\":true}");
 }
 
 void handleOilScale() {
@@ -573,8 +637,8 @@ void handleMode() {
     return;
   }
   const String arg = g_server.arg("m");
-  if (arg.length() != 1 || arg[0] < '0' || arg[0] > '4') {
-    reject("mode must be 0, 1, 2, 3 or 4");
+  if (arg.length() != 1 || arg[0] < '0' || arg[0] > '5') {
+    reject("mode must be 0, 1, 2, 3, 4 or 5");
     return;
   }
   dashboard::setMode((dashboard::Mode)(arg[0] - '0'), true, "web");
@@ -679,6 +743,7 @@ void startServer() {
   g_server.on("/oscale", HTTP_POST, handleOilScale);
   g_server.on("/opscale", HTTP_POST, handleOilPressScale);
   g_server.on("/cscale", HTTP_POST, handleCoolantScale);
+  g_server.on("/ohxkey", HTTP_POST, handleControllerKey);
   g_server.on("/update", HTTP_POST, handleOtaDone, handleOtaUpload);
   g_server.on("/favicon.ico", HTTP_GET, []() { g_server.send(204, "text/plain", ""); });
   g_server.onNotFound([]() { g_server.send(404, "text/plain", "not found"); });

@@ -2,9 +2,12 @@
 // oil_ui.cpp - the digital oil temperature face
 //
 // Same layout as the boost gauge: 270 degree arc with six scale labels,
-// a large value with decimal point on the baseline, an OIL °C caption,
-// and the intake-air temperature under a thin rule.
+// a large whole-degree value on the baseline, an OIL °C caption, and a thin
+// rule under it.
 // The arc scale is configurable (0.1 °C steps) and persisted in NVS.
+// Decode: Cluster_2 (0x420) byte 3, OilTemperature_4_1, 1 C/count with a
+// -60 C offset; 0xFF absent -> "-- °C". The count is whole degrees, so the
+// readout has no decimal point - the bus cannot report a fraction.
 // =====================================================================
 #include "ui/oil_ui.h"
 
@@ -41,8 +44,6 @@ constexpr int kTickRadius = kArcSize / 2 - kArcWidth - 18;
 lv_obj_t *g_root = nullptr;
 lv_obj_t *g_arc = nullptr;
 lv_obj_t *g_whole = nullptr;
-lv_obj_t *g_dot = nullptr;
-lv_obj_t *g_frac = nullptr;
 lv_obj_t *g_unit = nullptr;
 lv_obj_t *g_rule = nullptr;
 lv_obj_t *g_iat = nullptr;
@@ -117,8 +118,6 @@ void applyScheme() {
 
   const lv_color_t fg = theme::fg();
   lv_obj_set_style_text_color(g_whole, fg, 0);
-  lv_obj_set_style_text_color(g_dot, fg, 0);
-  lv_obj_set_style_text_color(g_frac, fg, 0);
   lv_obj_set_style_bg_color(g_rule, theme::line(), 0);
 }
 
@@ -138,8 +137,6 @@ void applyOpacity() {
     if (tick != nullptr) lv_obj_set_style_text_opa(tick, dim, 0);
   }
   lv_obj_set_style_text_opa(g_whole, g_masterOpa, 0);
-  lv_obj_set_style_text_opa(g_dot, g_masterOpa, 0);
-  lv_obj_set_style_text_opa(g_frac, g_masterOpa, 0);
   lv_obj_set_style_text_opa(g_unit, g_masterOpa, 0);
   lv_obj_set_style_bg_opa(g_status, g_masterOpa, 0);
   lv_obj_set_style_bg_opa(g_rule, g_masterOpa, 0);
@@ -186,17 +183,8 @@ void addValueRow(lv_obj_t *scr) {
   lv_obj_set_style_text_font(g_whole, FONT_VALUE, 0);
   lv_obj_set_style_text_color(g_whole, theme::fg(), 0);
 
-  // A real period glyph shares the digits' baseline, so it lands at the
-  // bottom of the value instead of floating in the middle.
-  g_dot = lv_label_create(row);
-  lv_label_set_text(g_dot, ".");
-  lv_obj_set_style_text_font(g_dot, FONT_VALUE, 0);
-  lv_obj_set_style_text_color(g_dot, theme::fg(), 0);
-
-  g_frac = lv_label_create(row);
-  lv_label_set_text(g_frac, "0");
-  lv_obj_set_style_text_font(g_frac, FONT_VALUE, 0);
-  lv_obj_set_style_text_color(g_frac, theme::fg(), 0);
+  // No decimal point and no fraction label here: Cluster_2 byte 3 is a whole
+  // degree count, so the tenths digit could only ever be ".0".
 }
 
 }  // namespace
@@ -245,7 +233,7 @@ void begin() {
   // Ticks
   addTicks(g_root);
 
-  // Value row (integer . fraction)
+  // Value row (whole degrees, no decimal point)
   addValueRow(g_root);
 
   g_unit = lv_label_create(g_root);
@@ -288,49 +276,37 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   if (!g_ready) return;
 
   // Oil temperature from Cluster_2 (0x420): byte 3 is OilTemperature_4_1,
-  // 1 °C/count with -60 °C offset. 0xFF means absent.
-  // The telemetry already gives us the value in °C.
-  static float shown = NAN;
-  const float target = t.oilTempValid ? t.oilTempC : NAN;
+  // 1 °C/count with a -60 °C offset, so the bus only ever reports whole
+  // degrees. 0xFF means absent. Nothing to interpolate between readings, so
+  // the value is drawn straight from the last packet - an eased value sat at
+  // a temperature the bus can never send.
+  const float shown = t.oilTempValid ? t.oilTempC : NAN;
 
-  if (isnan(target)) {
-    shown = NAN;
-  } else if (isnan(shown)) {
-    shown = target;
-  } else {
-    shown += (target - shown) * 0.30f;
-  }
-
-  // Only touch the widgets when the rounded value changes. The smoothing
-  // loop runs at 20 Hz, but repainting the thick arc on every iteration is
-  // what made the loop sluggish and the value look unsettled.
+  // Only touch the widgets when the drawn degree changes. The loop runs at
+  // 20 Hz, but repainting the thick arc on every iteration is what made the
+  // loop sluggish and the value look unsettled.
   const bool have = !isnan(shown);
-  const int tenths = have ? (int)lroundf(shown * 10.0f) : 0;
-  const int32_t drawn = have ? (int32_t)tenths : INT32_MIN;
+  const int degs = have ? (int)lroundf(shown) : 0;
+  const int32_t drawn = have ? (int32_t)degs : INT32_MIN;
 
   if (g_scaleDirty || drawn != g_lastDrawn) {
     g_scaleDirty = false;
     g_lastDrawn = drawn;
     if (!have) {
       lv_label_set_text(g_whole, "--");
-      lv_obj_add_flag(g_dot, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(g_frac, LV_OBJ_FLAG_HIDDEN);
       lv_arc_set_value(g_arc, 0);
     } else {
-      lv_obj_remove_flag(g_dot, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_remove_flag(g_frac, LV_OBJ_FLAG_HIDDEN);
-
-      // abs() so a negative value renders as "-2.5" rather than "-2.-5".
-      const int a = abs(tenths);
+      // abs() so the sign comes from the prefix, not from the digit.
+      const int a = abs(degs);
       char buf[8];
-      snprintf(buf, sizeof(buf), "%s%d", tenths < 0 ? "-" : "", a / 10);
+      snprintf(buf, sizeof(buf), "%s%d", degs < 0 ? "-" : "", a);
       lv_label_set_text(g_whole, buf);
-      snprintf(buf, sizeof(buf), "%d", a % 10);
-      lv_label_set_text(g_frac, buf);
 
-      // The arc spans min..max; the numeric row still shows the true value
-      // when it is outside the scale (the arc just sits at an end).
-      int arc = tenths - (int)g_min10;
+      // The arc spans min..max, which are stored in tenths because the web
+      // page allows a 0.1 °C range; the whole-degree reading converts back.
+      // The numeric row still shows the true value when it is outside the
+      // scale (the arc just sits at an end).
+      int arc = degs * 10 - (int)g_min10;
       if (arc < 0) arc = 0;
       if (arc > g_arcRange) arc = g_arcRange;
       lv_arc_set_value(g_arc, arc);

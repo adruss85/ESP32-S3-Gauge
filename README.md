@@ -5,12 +5,17 @@ A standalone **digital boost gauge** for the
 controller, running on a **Waveshare ESP32-S3-Touch-AMOLED-1.75** (466x466
 round AMOLED, CO5300 over QSPI, CST9217 touch).
 
-The gauge is **receive-only** with respect to the car: it listens for the
-controller's `OHX_STATUS` ESP-NOW broadcast for boost (and rpm/speed/throttle/
-mode), and decodes intake air temperature from `Engine_3` (`0x380`) in the
-CANN relay. It never sends ESP-NOW or CAN traffic, never touches the car's CAN
-bus, and the controller firmware is not modified. The only RF it originates is
-its own **CANv-gauge** setup AP, which serves a settings page and OTA uploads.
+The gauge **listens** to the car: it reads the controller's `OHX_STATUS`
+ESP-NOW broadcast for boost (and rpm/speed/throttle/mode/lock), and decodes
+intake air temperature from `Engine_3` (`0x380`) in the CANN relay. It never
+touches the car's CAN bus and the controller firmware is not modified.
+
+It **transmits one thing**: a signed Haldex mode request, sent when the driver
+taps the **Haldex screen**. That is the whole control surface — one gesture, on
+one screen, and the controller's own answer is what the screen shows. There is
+no CAN transmit, no automatic action and no other ESP-NOW traffic; the other RF
+it originates is its own **CANv-gauge** setup AP, which serves a settings page
+and OTA uploads.
 
 It also has a local **G-meter** screen driven by the board's QMI8658 IMU:
 acceleration/braking on the vertical axis, a fading 1 s tail, and a white
@@ -36,18 +41,23 @@ does not touch the car's network.
   lights off. Without a 58s reading the emission stays at the day level.
 - **Seven colour schemes**, copied from `OpenHaldex-S3-Dash` so the gauge and
   the dashboard on the same car read the same: **Midnight, Orange, Green,
-  Blue, Purple, White, Red**. Midnight is the default. A **tap** on the glass
-  steps to the next one, as does a **short press** of the board's **BOOT** key
-  (GPIO0); a **700 ms hold** switches to the G-meter and back. The key is
-  polled with a 30 ms debounce, so a deliberate tap lands even while the arc
+  Blue, Purple, White, Red**. Midnight is the default. A **550 ms hold** on the
+  glass steps to the next one, as does a **short press** of the board's
+  **BOOT** key (GPIO0); a **700 ms hold** of the key switches screens. The key
+  is polled with a 30 ms debounce, so a deliberate tap lands even while the arc
   is repainting. With the CANN relay on, **Cancel + Down** together on the PQ
   cruise stalk cycles the accent, and a **long press of Down alone** switches
   screens (`[ui] cruise mode`); each accent source logs `[ui] accent <name>`
   (the stalk adds `[ui] cruise combo`). The scheme is stored in NVS and
   survives a power cycle.
-- A **horizontal swipe** slides to the other screen. The swipe animates with a
+- A **horizontal swipe** slides to the next screen. The swipe animates with a
   280 ms cubic ease-out push, because that is the motion the finger just made;
   BOOT, the stalk and the web page keep the 260 ms cross-fade.
+- A **Haldex screen**: the mode in force (`STOCK`, `FWD`, `50:50`, `60:40`,
+  `75:25`, `EXPERT`), the lock the controller is requesting and the lock the
+  coupling is actually giving, with the coupling state underneath. **One
+  tap** asks the controller for the next mode — see [Haldex
+  screen](#haldex-screen).
 - A **G-meter screen**: a 65 px accent-coloured blob moves vertically for
   acceleration/braking and horizontally for lateral acceleration; a fading
   tail covers the last second. The white `0.00 g` readout at the bottom is
@@ -148,6 +158,38 @@ the flush falls back to unsynced. The panel IO queue holds 64 transfers,
 and the G-meter draws its dot, tail and readout into one 466x388 canvas, so
 only one object is invalidated instead of a blob, 20 tail dots and a label.
 The display uses one partial draw buffer and serialises the flushes.
+
+## Haldex screen
+
+The Haldex screen (the console calls it `haldex`) is four lines of type:
+`HALDEX`, the **mode in force**, `LOCK REQ` and `LOCK ACT` percentages, and a
+line under the mode for the coupling state. It replaced a drivetrain drawing
+that could not be read on the glass in a car.
+
+**One tap asks the controller for the next mode**, in the controller's own
+order: `STOCK → FWD → 50:50 → 60:40 → 75:25 → EXPERT → STOCK`. A standalone
+controller has no `STOCK` to fall back on, so that step is skipped. The
+sub-line shows what happened: `60:40: sending` in amber, then `60:40: ok` in
+green or the controller's refusal — `wrong key`, `disabled`, `car moving`,
+`control off`, `no haldex`, `no reply` — for five seconds. One request is in
+flight at a time; a stale nonce (another sender got there first) earns exactly
+one silent retry.
+
+This is the only thing the gauge transmits. The request is `OHX_C_MODE` over
+ESP-NOW, unicast to the controller that is broadcasting `OHX_STATUS`, signed
+with HMAC-SHA256 keyed on **that controller's AP password** — which is why
+there is a password field on the web page. An open AP means an empty key,
+which is still a key. The controller never replies directly: its verdict
+arrives in the `ackSrc`/`ackSeq`/`ackResult` fields of the next status
+broadcast, which is what the sub-line reads.
+
+If the controller's AP is passworded and no key is stored, a tap sends nothing
+and says `no key` rather than firing a signature that would be rejected.
+
+> **The open-AP case.** With no AP password the key is the empty string and the
+> nonce is broadcast, so anyone in range can compute a valid signature. That is
+> how the protocol was designed; if that matters, put a password on the
+> controller's AP and enter it on the gauge's page.
 
 ## Boot screen
 
@@ -294,6 +336,11 @@ build_flags = -DGAUGE_AP_PASSWORD=\"your-password\"
 The boot log states which mode is active:
 `[web] AP "CANv-gauge" (open) channel 1, http://192.168.4.1/`.
 
+Two credentials are involved and neither belongs in git: the gauge's own AP
+password (a build flag, above) and the controller's AP password (entered on the
+page, stored in NVS, only ever used to sign a mode request). The console says
+whether the latter is stored, never what it is.
+
 ## Capturing the glass
 
 Layout and colour changes can be checked without a camera. The capture build
@@ -328,6 +375,18 @@ PLATFORMIO_BUILD_FLAGS="-DGAUGE_CAPTURE=1 -DGAUGE_CAPTURE_GMETER=1" \
 
 That writes one frame named by scheme, exactly like the gauge sweep.
 
+`-DGAUGE_CAPTURE_DRIVE=1` captures the Haldex screen with a fixed `60:40`
+mode and a 45% request against a 38% actual, one frame per scheme:
+
+```bash
+PLATFORMIO_BUILD_FLAGS="-DGAUGE_CAPTURE=1 -DGAUGE_CAPTURE_DRIVE=1" \
+  ./.venv/bin/pio run -e esp32s3 -t upload --upload-port /dev/ttyACM0
+./.venv/bin/python tools/capture_frame.py /dev/ttyACM0 /tmp/haldex
+```
+
+A capture build cannot send a mode request: only a tap transmits, and a
+capture is a render.
+
 `-DGAUGE_CAPTURE_SPLASH=1` captures the boot screen instead, at two seconds
 with the loading rule part-filled:
 
@@ -345,21 +404,28 @@ g++ -std=c++17 -Isrc -Iinclude -o /tmp/gmeter_test tools/gmeter_test.cpp src/app
 
 g++ -std=c++17 -Itools/host -Isrc -Iinclude -o /tmp/boot_button_test tools/boot_button_test.cpp src/hal/boot_button.cpp
 /tmp/boot_button_test
+
+g++ -std=c++17 -Isrc -Iinclude -o /tmp/gesture_test tools/gesture_test.cpp src/hal/gesture.cpp
+/tmp/gesture_test
 ```
 
 `gmeter_test` checks gravity removal, the 0.5 g signs, the diagonal
 `sqrt(v² + l²)`, the speed gate, tilt re-learning, auto mount and Zero. `boot_button_test`
-checks short, long and bounce behaviour. Neither touches the panel, the IMU or
-the car.
+checks short, long and bounce behaviour. `gesture_test` drives the touch
+classifier at the 15 ms poll rate: a still press is a tap, an 8 px jitter is
+still a tap, a 550 ms dwell is a hold that fires while the finger is down and
+whose release is swallowed, a 60 px drag is a swipe, and a flick that wanders
+past 12 px — including one that comes back to where it started — is nothing at
+all. None of them touches the panel, the IMU or the car.
 
 ## Repository layout
 
 ```text
 include/     board pins, LVGL config, theme, version, shared wire headers
-src/app/     config, NVS settings (scheme/scale/mode/mount), G-meter math
-src/hal/     CO5300 QSPI panel, CST9217 touch, BOOT key, QMI8658 IMU
-src/net/     ESP-NOW receive, channel discovery, IAT decode, setup AP + OTA
-src/ui/      gauge, G-meter, dashboard/fade+slide, boot splash, schemes
+src/app/     config, NVS settings (scheme/scale/mode/mount/key), G-meter math
+src/hal/     CO5300 QSPI panel, CST9217 touch + gestures, BOOT key, QMI8658 IMU
+src/net/     ESP-NOW receive, mode request, channel discovery, IAT decode, page
+src/ui/      gauge, oil/coolant faces, Haldex face, G-meter, transitions, splash
 tools/       serial monitor, framebuffer capture, host math/button checks
 assets/      splash art and documentation screenshots
 docs/        status and verification notes

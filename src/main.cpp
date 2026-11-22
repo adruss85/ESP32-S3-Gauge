@@ -18,6 +18,14 @@
 #define GAUGE_CAPTURE_GMETER 0
 #endif
 
+// Capture the Haldex face instead of the boost gauge: a fixed mode and a
+// fixed lock request/actual, so the whole screen is exercised in one shot.
+// A capture build still cannot send anything - a tap is what transmits, not a
+// render, and nothing here calls onTap().
+#ifndef GAUGE_CAPTURE_DRIVE
+#define GAUGE_CAPTURE_DRIVE 0
+#endif
+
 // Capture the boot splash (at 1.5 s, half-filled) instead of the gauge.
 #ifndef GAUGE_CAPTURE_SPLASH
 #define GAUGE_CAPTURE_SPLASH 0
@@ -40,6 +48,7 @@
 #include "hal/touch.h"
 #include "theme.h"
 #include "ui/dashboard.h"
+#include "ui/drive_ui.h"
 #include "ui/gauge_ui.h"
 #include "ui/splash.h"
 #endif
@@ -114,17 +123,18 @@ void setup() {
     touch::begin();
     dashboard::begin();
 #if GAUGE_CAPTURE
-    // The capture sweep photographs the boost gauge, never a stored
-    // G-meter mode. The G-meter build forces its own screen.
+    // The capture sweep photographs the boost gauge, never a stored screen.
+    // The G-meter and Haldex builds force their own face.
     dashboard::setMode(GAUGE_CAPTURE_GMETER ? dashboard::Mode::GMeter
-                                            : dashboard::Mode::Gauge,
+                       : GAUGE_CAPTURE_DRIVE ? dashboard::Mode::Drive
+                                             : dashboard::Mode::Gauge,
                        false, "capture");
 #endif
     // After the dashboard roots, so the splash is the topmost object. It
     // covers the JPEG decode and the first WiFi/ESP-NOW setup.
     splash::begin();
     boot_button::begin();
-    Serial.printf("[ui] accent %s (BOOT: short = scheme, long = screen; touch: tap = scheme, swipe = screen)\n",
+    Serial.printf("[ui] accent %s (BOOT: short = scheme, long = screen; touch: hold = scheme, tap = haldex mode, swipe = screen)\n",
                   theme::schemeName());
   }
 #endif
@@ -152,6 +162,14 @@ void loop() {
     } else if (key == 'm') {
       Serial.read();
       dashboard::toggleMode("console");
+    } else if (key == 'h') {
+      Serial.read();
+      // The same function the touch tap calls, so a mode request and its ack
+      // can be exercised from the console with no finger on the glass.
+      if (dashboard::mode() != dashboard::Mode::Drive) {
+        dashboard::setMode(dashboard::Mode::Drive, false, "console");
+      }
+      drive_ui::onTap();
     } else if (key == 'z') {
       Serial.read();
       dashboard::zeroG();
@@ -264,6 +282,17 @@ void loop() {
     t.oilTempC = 98.0f;
     s.raw = 1;
     s.statusPackets = 1;
+#if GAUGE_CAPTURE_DRIVE
+    // A mid-range request against a lower actual, which is the pair a driver
+    // actually reads (and the case where the two must not look alike).
+    t.mode = 3;  // 60:40
+    t.lockTargetValid = true;
+    t.lockTarget = 45;
+    t.lockActualValid = true;
+    t.lockActual = 38;
+    t.haldexCan = true;
+    t.ctrlAccept = true;
+#endif
 #endif
     display::applyDimmer(t.term58s);
     dashboard::update(t, s);

@@ -6,7 +6,9 @@
 // and the intake-air temperature under a thin rule.
 // The arc scale is configurable (0.1 °C steps) and persisted in NVS.
 // Decode: Cluster_2 (0x420) byte 4, 0.75 C/count with -48 C offset; 0xFF
-// absent -> "-- °C".
+// absent -> "-- °C". 0.75 is three steps of the DBC's 0.25 °C grid, so a
+// reading can never land between two packets: the value is drawn straight
+// from the last packet, with no smoothing.
 // =====================================================================
 #include "ui/coolant_ui.h"
 
@@ -265,21 +267,15 @@ void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   if (!g_ready) return;
 
   // Coolant from Cluster_2 (0x420): byte 4 is CoolantTemp_4_1,
-  // 0.75 °C/count with a -48 °C offset. 0xFF means absent.
-  static float shown = NAN;
-  const float target = t.coolantValid ? t.coolantC : NAN;
+  // 0.75 °C/count with a -48 °C offset. 0xFF means absent. 0.75 is three
+  // steps of the DBC's 0.25 °C grid, so there is nothing to interpolate: an
+  // eased value would sit at a temperature the bus can never send and make
+  // the last digit wander long before the next packet arrives.
+  const float shown = t.coolantValid ? t.coolantC : NAN;
 
-  if (isnan(target)) {
-    shown = NAN;
-  } else if (isnan(shown)) {
-    shown = target;
-  } else {
-    shown += (target - shown) * 0.30f;
-  }
-
-  // Only touch the widgets when the rounded value changes. The smoothing
-  // loop runs at 20 Hz, but repainting the thick arc on every iteration is
-  // what made the loop sluggish and the value look unsettled.
+  // Only touch the widgets when the drawn value changes. The loop runs at
+  // 20 Hz, but repainting the thick arc on every iteration is what made
+  // the loop sluggish.
   const bool have = !isnan(shown);
   const int tenths = have ? (int)lroundf(shown * 10.0f) : 0;
   const int32_t drawn = have ? (int32_t)tenths : INT32_MIN;

@@ -31,6 +31,16 @@ struct Telemetry {
   uint8_t seq;
   char name[25];      // controller's AP SSID
 
+  // Controller flags (OHX_STATUS.flags[]). The drive face needs them: whether
+  // the coupling is doing anything, and whether the controller would accept a
+  // mode request at all.
+  bool standalone;    // OHX_F0_STANDALONE
+  bool haldexCan;     // OHX_F0_HALDEX_CAN: lockActual is a real reading
+  bool ctrlAccept;    // OHX_F2_CONTROL: commands over ESP-NOW are accepted
+  bool keyed;         // OHX_F2_KEY: its AP has a password, so commands sign
+  bool couplingOpen;  // OHX_F1_COUPLING_OPEN
+  bool tempProt;      // OHX_F1_TEMP_PROT
+
   bool iatValid;      // a fresh Engine_3 (0x380) frame has arrived
   float iatC;         // intake air temperature, degrees C
 
@@ -61,7 +71,10 @@ struct Telemetry {
   bool lockActualValid;
   uint8_t lockActual;
 
-  // Haldex lock target from OHX_STATUS (0-100%, requested lock).
+  // Haldex lock target from OHX_STATUS (0-100%, requested lock). The header
+  // documents no sentinel for this field, but 0xFF would be 255% on a bar
+  // that tops out at 100, so it is treated as absent like lockActual.
+  bool lockTargetValid;
   uint8_t lockTarget;
 };
 
@@ -97,5 +110,47 @@ bool takeSchemeEvent();
 // One-shot: GRA_Down_Long on the PQ cruise stalk without GRA_Cancel. This is
 // the cruise-stalk equivalent of the BOOT 700 ms hold and toggles the screen.
 bool takeModeEvent();
+
+// ---- the one thing this firmware transmits ---------------------------
+//
+// A Haldex mode request (OHX_C_MODE) to the controller that is broadcasting
+// OHX_STATUS. Everything else the gauge sends is the setup AP's own 802.11
+// beacons; nothing else on the wire originates here.
+//
+// The command is signed with HMAC-SHA256 keyed on the controller's AP
+// password, which is why that password is a stored setting. The controller
+// never answers directly: the verdict arrives in the ack fields of its next
+// status broadcast, so sendMode() succeeding only means "on the air".
+
+enum class SendResult : uint8_t {
+  Ok = 0,
+  NoStatus,  // no fresh OHX_STATUS: nothing to sign against, no MAC to send to
+  NoPeer,    // ESP-NOW refused the unicast peer
+  NoKey,     // the controller's AP is passworded and no key is stored
+  Radio,     // esp_now_send() failed
+  Invalid,   // not a mode: the caller is broken, nothing was sent
+};
+
+// Ask the controller for a Haldex mode (0 Stock .. 5 Expert).
+SendResult sendMode(uint8_t mode);
+
+// Sequence number of the last command this build put on the air (0 = none).
+uint8_t lastSentSeq();
+
+// Result codes that are ours, not the controller's.
+inline constexpr uint8_t kAckNoLink = 0xFE;  // nothing was sent
+inline constexpr uint8_t kAckNoKey = 0xFD;   // a key is needed and not stored
+inline constexpr uint8_t kAckNoReply = 0xFF; // sent, never answered
+
+struct Ack {
+  bool valid;       // a verdict for one of our commands has arrived
+  uint8_t result;   // ohxResult_t, or kAckNoLink / kAckNoKey / kAckNoReply
+  uint8_t seq;      // the command it is about
+  uint32_t ageMs;   // since the verdict arrived
+};
+
+// The last verdict heard. valid stays true once set, so the caller decides how
+// long to show it; a new command does not clear it.
+Ack lastAck();
 
 }  // namespace ohxnow

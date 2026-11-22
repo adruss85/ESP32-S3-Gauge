@@ -9,22 +9,20 @@
 //   0xD0 0x00 0xAB        acknowledge, which re-arms the next report
 //
 // One finger is used. The point is fed to LVGL as a pointer indev so future
-// widgets work, and the same stream is classified here into the two gestures
-// the gauge has: a tap (next colour scheme) and a horizontal swipe (next
-// screen).
+// widgets work, and the same stream is classified by hal/gesture.cpp into the
+// three gestures the gauge has: a motionless hold (next colour scheme), a
+// quick motionless tap (Haldex mode, on the Haldex screen only) and a
+// horizontal swipe (next screen).
 // =====================================================================
 #pragma once
 
 #include <stdint.h>
 
+#include "hal/gesture.h"
+
 namespace touch {
 
-enum class Gesture : uint8_t {
-  None = 0,
-  Tap,        // press and release in place
-  SwipeLeft,  // finger moved left: advance
-  SwipeRight, // finger moved right: go back
-};
+using Gesture = gesture::Gesture;
 
 // Reset the controller, read its resolution and register the LVGL pointer.
 // False (with a log line) if it does not answer; the gauge still runs.

@@ -2,14 +2,17 @@
 // settings.cpp - NVS-backed display preferences
 //
 // One Preferences namespace ("gauge") holds the accent scheme, boost scale,
-// display mode and G-meter mount. Writes are rare (a BOOT press or a web
-// form), so the roughly 15 ms flash stall they cause is acceptable; reads
-// happen once at boot.
+// display mode, G-meter mount and the controller's access-point password that
+// signs a mode request. Writes are rare (a BOOT press or a web form), so the
+// roughly 15 ms flash stall they cause is acceptable; reads happen once at
+// boot.
 // =====================================================================
 #include "app/settings.h"
 
 #include <Arduino.h>
 #include <Preferences.h>
+
+#include <string.h>
 
 namespace settings {
 namespace {
@@ -29,6 +32,7 @@ constexpr char kKeyOilPressMin[] = "omin10p";
 constexpr char kKeyOilPressMax[] = "omax10p";
 constexpr char kKeyCoolantMin[] = "cmin10";
 constexpr char kKeyCoolantMax[] = "cmax10";
+constexpr char kKeyControllerKey[] = "ohxkey";
 
 // The stored scheme is a byte in NVS, so a reordering is a migration, not a
 // cosmetic change. Version 1 is the 1.85 build's six accents:
@@ -63,6 +67,7 @@ Values g_values = {0, 0, 250, 0, 0, 0, 400, 1200, 0, 1450, 40, 1200};
 
 Preferences g_prefs;
 bool g_open = false;
+char g_controllerKey[kControllerKeyMax + 1] = "";
 
 bool openPrefs() {
   if (g_open) return true;
@@ -209,7 +214,7 @@ void begin() {
     Serial.printf("[set] stored oil scale %ld..%ld rejected; using 40..120\n",
                   (long)omin10, (long)omax10);
   }
-  if (mode >= 0 && mode <= 4) g_values.mode = (uint8_t)mode;
+  if (mode >= 0 && mode <= 5) g_values.mode = (uint8_t)mode;
   if (mount >= 0 && mount <= 2) g_values.mount = (uint8_t)mount;
   if (flip >= 0 && flip <= 1) g_values.gflip = (uint8_t)flip;
 
@@ -233,6 +238,18 @@ void begin() {
                   (long)cmin10, (long)cmax10);
   }
 
+  // The controller's AP password, for signing a mode request. Length only is
+  // checked here; whether it is right is the controller's answer to the first
+  // command, not something this firmware can verify offline.
+  const String key = g_prefs.getString(kKeyControllerKey, "");
+  if (key.length() <= kControllerKeyMax) {
+    strncpy(g_controllerKey, key.c_str(), kControllerKeyMax);
+    g_controllerKey[kControllerKeyMax] = '\0';
+  } else {
+    Serial.printf("[set] stored controller key is %u chars; ignored\n",
+                  (unsigned)key.length());
+  }
+
   Serial.printf("[set] scheme %u, scale %.1f..%.1f PSI\n", (unsigned)g_values.scheme,
                 (double)g_values.min10 / 10.0, (double)g_values.max10 / 10.0);
   Serial.printf("[set] oil scale %.1f..%.1f °C\n",
@@ -240,7 +257,8 @@ void begin() {
   const char *mountName = g_values.mount == 2   ? "auto"
                           : g_values.mount == 1 ? "flat"
                                                 : "upright";
-  const char *modeName = g_values.mode == 4 ? "g-meter"
+  const char *modeName = g_values.mode == 5 ? "drive"
+                         : g_values.mode == 4 ? "g-meter"
                          : g_values.mode == 3 ? "coolant"
                          : g_values.mode == 2 ? "oil-press"
                          : g_values.mode == 1 ? "oil"
@@ -253,6 +271,9 @@ void begin() {
   Serial.printf("[set] coolant scale %.1f..%.1f °C\n",
                 (double)g_values.cmin10 / 10.0,
                 (double)g_values.cmax10 / 10.0);
+  // Never the key itself: whether one is stored is all the console needs.
+  Serial.printf("[set] controller key %s\n",
+                g_controllerKey[0] ? "stored" : "none (open AP only)");
 }
 
 const Values &get() { return g_values; }
@@ -306,7 +327,7 @@ bool setCoolantScale(int16_t min10, int16_t max10) {
 }
 
 bool setMode(uint8_t mode) {
-  if (mode > 4) return false;
+  if (mode > 5) return false;
   if (mode == g_values.mode) return true;
   g_values.mode = mode;
   store(kKeyMode, mode);
@@ -320,6 +341,28 @@ bool setMount(uint8_t mount, uint8_t flip) {
   g_values.gflip = flip;
   store(kKeyMount, mount);
   store(kKeyFlip, flip);
+  return true;
+}
+
+const char *controllerKey() { return g_controllerKey; }
+
+bool setControllerKey(const char *key) {
+  if (key == nullptr) key = "";
+  const size_t len = strlen(key);
+  if (len > kControllerKeyMax) return false;
+  if (strcmp(key, g_controllerKey) == 0) return true;
+  strncpy(g_controllerKey, key, kControllerKeyMax);
+  g_controllerKey[kControllerKeyMax] = '\0';
+  if (!openPrefs()) return false;
+  const size_t written = g_prefs.putString(kKeyControllerKey, key);
+  // putString returns the bytes written, which is 0 on an empty string that
+  // was still stored - so a clearing write is checked differently.
+  if (written == 0 && len > 0) {
+    Serial.println("[set] controller key not persisted (NVS full?)");
+    return false;
+  }
+  Serial.printf("[set] controller key %s (%u chars)\n",
+                len == 0 ? "cleared" : "stored", (unsigned)len);
   return true;
 }
 

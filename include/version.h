@@ -3,6 +3,35 @@
 // The version string is the changelog. Bump it for built changes, not for
 // docs-only commits.
 //
+// 0.7.0 - The Haldex face, and the gauge's first and only transmission. The
+// drive view's drivetrain drawing could not be read on the glass in a car, so
+// it is now four lines of type: mode (STOCK/FWD/50:50/60:40/75:25/EXPERT),
+// LOCK REQ, LOCK ACT, and the coupling state under the mode. One tap asks the
+// controller for the next mode: OHX_C_MODE over ESP-NOW, unicast to the MAC
+// that broadcasts OHX_STATUS, HMAC-SHA256 signed with the controller's AP
+// password (stored in NVS as ohxkey, entered on the web page, never logged or
+// echoed). The answer arrives in the next status's ackSrc/ackSeq/ackResult
+// and is drawn in the sub-line for 5 s; one STALE retry, no other retries.
+// There is no lock-duty opcode in v1, so LOCK REQ/ACT are display only. The
+// gauge is no longer receive-only: AGENTS.md rule 2 is now the single-write-
+// path rule. Touch tap -> hold (550 ms, motionless) for the colour scheme;
+// a tap now means the Haldex mode and only on that screen, because a flicked
+// swipe was being read as a tap. The press's furthest excursion is tracked,
+// so a press that wanders more than 12 px is never a tap. Drive is now a
+// storable mode (settings accepted 0..4, so the face could not survive a
+// reboot). mbedtls HMAC keeps the signature on the gauge.
+// Build sizes: flash 1,467,259 B (22.4%), RAM 119,096 B (36.3%); esp32dev
+// 956,968 B (73.0%) flash / 48,536 B (14.8%) RAM.
+// 0.6.5 - Match the readouts to what the bus can send. Oil temperature is
+// Cluster_2 (0x420) byte 3, a whole-degree count, so the oil face drops the
+// decimal point and the tenths digit (the web Live line prints whole degrees
+// too); the arc still scales in tenths, so a 0.1 °C range set from /oscale
+// keeps working. Oil temp and coolant both draw the last packet straight: an
+// eased value would sit at a temperature the bus can never send and make the
+// last digit wander (coolant's count is 0.75 °C/count, three steps of the DBC
+// 0.25 °C grid). Boost and oil pressure keep their 0.30 easing.
+// Build sizes: flash 1,463,835 B (22.3%), RAM 118,960 B (36.3%); esp32dev
+// 955,412 B (72.9%) flash / 48,432 B (14.8%) RAM.
 // 0.6.4 - Correct the coolant and oil-pressure sources. Coolant is
 // Cluster_2 (0x420) byte 4, 0.75 °C/count - 48 (0.6.2 read Engine_1 byte 1,
 // which is Inner_Engine_Torque). Oil pressure is Engine_7 (0x588) bytes 5-6,
@@ -72,4 +101,4 @@
 //         baseline, and the link lamp is gone.
 // 0.2.0 - First gauge build: 270-degree boost arc and IAT readout.
 // 0.1.0 - Headless CANN listener.
-#define OHX_GAUGE_VERSION "0.6.4"
+#define OHX_GAUGE_VERSION "0.7.0"

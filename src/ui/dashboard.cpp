@@ -1,10 +1,10 @@
 // =====================================================================
 // dashboard.cpp - mode ownership, IMU sampling, transitions and gestures
 //
-// Five screens on one LVGL display: boost gauge, oil temperature face,
-// oil pressure face, coolant face, and G-meter. The dashboard owns IMU
-// sampling, mode setting and the short cross-fade / slide. It keeps the
-// G-meter math running even while other faces are displayed, so switching
+// Six screens on one LVGL display: boost gauge, oil temperature face,
+// oil pressure face, coolant face, G-meter and the Haldex face. The dashboard
+// owns IMU sampling, mode setting and the short cross-fade / slide. It keeps
+// the G-meter math running even while other faces are displayed, so switching
 // screens shows a warm 1 s average rather than a blank dot.
 // =====================================================================
 #include "ui/dashboard.h"
@@ -60,6 +60,20 @@ gmeter::Mount g_lastMount = gmeter::Mount::Upright;
 
 const char *mountName(gmeter::Mount m) {
   return m == gmeter::Mount::Flat ? "flat" : "upright";
+}
+
+// One name per screen, for the console. The chain this replaces had grown a
+// clause per face and had already lost Drive.
+const char *modeName(Mode m) {
+  switch (m) {
+    case Mode::Gauge: return "gauge";
+    case Mode::Oil: return "oil";
+    case Mode::OilPress: return "oil-press";
+    case Mode::Coolant: return "coolant";
+    case Mode::GMeter: return "g-meter";
+    case Mode::Drive: return "haldex";
+  }
+  return "?";
 }
 
 void applyOpacity() {
@@ -118,9 +132,14 @@ void applySlide(float p) {
   setSlideOf(g_mode, inX);
 }
 
-// Taps and swipes. Kept here because this module already owns scheme and
-// mode, and because a gesture must not fight the BOOT key: both end in the
-// same two functions.
+// Holds, taps and swipes. Kept here because this module already owns scheme
+// and mode, and because a gesture must not fight the BOOT key: both end in
+// the same two functions.
+//
+// A hold steps the colour scheme; a plain tap does nothing except on the
+// drive face, where it asks the controller for the next Haldex mode. Taps
+// used to step the scheme, which made a flicked swipe that never travelled
+// far enough look like a colour change.
 void onGesture(touch::Gesture g) {
   if (g == touch::Gesture::None) return;
   // The splash owns the glass, and a transition in flight must not be
@@ -128,9 +147,23 @@ void onGesture(touch::Gesture g) {
   // offset.
   if (splash::active() || g_moving) return;
 
-  if (g == touch::Gesture::Tap) {
+  if (g == touch::Gesture::Hold) {
     nextScheme();
+    Serial.println("[ui] touch hold");
+    return;
+  }
+
+  if (g == touch::Gesture::Tap) {
+    // The drive face is the one screen reached on purpose, so it is the one
+    // place a tap has a job. Everywhere else it is ignored: a swipe's tail
+    // lands here, and silently changing a display setting is what we are
+    // trying to stop.
+    if (g_mode != Mode::Drive) {
+      Serial.println("[ui] touch tap (ignored)");
+      return;
+    }
     Serial.println("[ui] touch tap");
+    drive_ui::onTap();
     return;
   }
 
@@ -205,13 +238,8 @@ void begin() {
   const char *mountSetting = v.mount == 2   ? "auto"
                              : v.mount == 1 ? "flat"
                                             : "upright";
-  Serial.printf("[ui] mode %s, mount %s, flip %u\n",
-                g_mode == Mode::GMeter ? "g-meter"
-                : g_mode == Mode::Oil ? "oil"
-                : g_mode == Mode::OilPress ? "oil-press"
-                : g_mode == Mode::Coolant ? "coolant"
-                                         : "gauge", mountSetting,
-                (unsigned)v.gflip);
+  Serial.printf("[ui] mode %s, mount %s, flip %u\n", modeName(g_mode),
+                mountSetting, (unsigned)v.gflip);
 }
 
 Mode mode() { return g_mode; }
@@ -271,12 +299,7 @@ void setMode(Mode m, bool persist, const char *source, Anim anim) {
   }
 
   if (persist) settings::setMode((uint8_t)m);
-  Serial.printf("[ui] mode %s (%s, %s)\n",
-                g_mode == Mode::GMeter ? "g-meter"
-                : g_mode == Mode::Oil ? "oil"
-                : g_mode == Mode::OilPress ? "oil-press"
-                : g_mode == Mode::Coolant ? "coolant"
-                                          : "gauge", source,
+  Serial.printf("[ui] mode %s (%s, %s)\n", modeName(g_mode), source,
                 anim == Anim::Slide ? "slide" : "fade");
 }
 

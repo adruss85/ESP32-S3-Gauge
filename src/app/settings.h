@@ -6,11 +6,16 @@
 // in NVS.  The G-meter mount is also stored: a gauge that is flipped 180
 // degrees during installation should not need a rebuild.
 //
+// The controller's access-point password lives here too: it is what signs a
+// Haldex mode request from the drive face. It is the one value that is a
+// secret, so it has its own accessors and never travels in Values.
+//
 // Values are plain integers: this module deliberately does not include
 // theme.h, LVGL or the IMU driver, so the headless esp32dev build can use it
 // too. The caller maps scheme to theme::Scheme and mount to gmeter::Mount.
 // =====================================================================
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 namespace settings {
@@ -83,5 +88,16 @@ bool setOilPressScale(int16_t min10, int16_t max10);
 
 // Persist the coolant scale, in tenths of a degree C.
 bool setCoolantScale(int16_t min10, int16_t max10);
+
+// The OpenHaldex controller's access-point password. It exists for one
+// reason: a Haldex mode request is signed with HMAC-SHA256 keyed on it, so
+// the gauge cannot ask for a mode without knowing it. An empty string is the
+// key for an open access point, which is a key and not the absence of one.
+//
+// It is stored in NVS beside the display settings, never printed and never
+// included in the status JSON. Set it on the setup page.
+inline constexpr size_t kControllerKeyMax = 63;  // WPA2 passphrase limit
+const char *controllerKey();
+bool setControllerKey(const char *key);
 
 }  // namespace settings

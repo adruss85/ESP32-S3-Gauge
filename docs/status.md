@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 21 Nov 2026, firmware **0.6.4**.
+Last updated: 22 Nov 2026, firmware **0.7.0**.
 
 > **Hardware state.** The gauge runs on a **Waveshare ESP32-S3-Touch-AMOLED-1.75**
 > (466x466 CO5300 AMOLED, CST9217 touch). The 1.85 unit this firmware was
@@ -156,14 +156,55 @@ Last updated: 21 Nov 2026, firmware **0.6.4**.
   (22.3%)**, static RAM **119,008 B (36.3%)**; headless `esp32dev`
   955,400 B (72.9%) flash / 48,432 B (14.8%) RAM.
 
+- [x] **Readout resolution matched to the bus (0.6.5).** Oil temperature is
+  `Cluster_2` (`0x420`) byte 3, a whole-degree count, so the oil face no longer
+  draws a decimal point or a tenths digit: the value row is a single whole-degree
+  label, and the web Live line prints whole degrees too. The arc keeps its
+  tenths scale, so a 0.1 °C range set through `/oscale` still applies. Both
+  faces now draw the latest packet directly - coolant's count is 0.75 °C/count,
+  three steps of the DBC's 0.25 °C grid, and oil temp is whole degrees, so the
+  old 0.30 smoothing loop only put the display at a temperature the bus can
+  never send and made the last digit wander. Boost and oil pressure keep
+  their easing. Compile-verified only: both faces need a CANN sender to see a
+  value at all, and an eye on the glass.
+  Build sizes: flash **1,463,835 B (22.3%)**, static RAM **118,960 B (36.3%)**;
+  headless `esp32dev` 955,412 B (72.9%) flash / 48,432 B (14.8%) RAM.
+
 ## Not verified yet
 
-* **0.6.3 has no recorded hardware verification.** This entry was written from
+* **0.7.0 has not been on hardware at all.** The Haldex face, the new touch
+  classifier and the mode request were built and reviewed, not run. In
+  particular:
+  - **No frame has been sent.** `sendMode()` has never put an `OhxCommand` on
+    the air from this board, so the signature, the unicast peer, the
+    acknowledgement match (`ackSrc`'s last two bytes plus `ackSeq`) and the
+    single `STALE` retry are all unexercised. The first thing to watch is
+    `[haldex] mode -> FWD (sent)` followed by `[haldex] mode FWD: ok (ack
+    after N ms)` — an ack that never lands while the controller's own page
+    shows the mode changed would mean the ack MAC match is wrong, not that
+    the send failed.
+  - **The key never travels.** Confirm `/ohxkey` stores it (`[set] controller
+    key stored (N chars)`), that a reboot still signs (`ok`, not `wrong key`),
+    and that neither the page nor the console ever prints it.
+  - **The touch classifier's new numbers** (12 px slop, 550 ms hold) are
+    guesses from the geometry, not measurements. The check that matters: a
+    swipe must never step the scheme, and a hold must be repeatable without
+    moving the finger.
+  - **The Haldex layout has not been photographed.** `-DGAUGE_CAPTURE_DRIVE=1`
+    exists for exactly this. The geometry is reasoned from the font metrics
+    (montserrat_48 is 52/9, montserrat_20 is 22/4, so the value boxes sit
+    25 px above their captions), not seen on the glass.
+  - **Drive as a stored mode.** `settings::setMode()` used to reject anything
+    above 4, so the Haldex face could not survive a reboot. That bound is now
+    5; confirm a board left on the Haldex face comes back to it.
+- **0.6.3 has no recorded hardware verification.** This entry was written from
   the release build (clean, `2f61f3b`); no bench log for these changes exists
   in this file, so treat them as compile-verified only. What
   changed: a sixth **Drive** screen (RPM, four wheel speeds and slip %, Haldex
   target/actual, ABS/TC chips) in the swipe cycle
-  Gauge -> Oil -> OilPress -> Coolant -> G-meter -> Drive -> Gauge; oil
+  Gauge -> Oil -> OilPress -> Coolant -> G-meter -> Drive -> Gauge - that
+  drawing was unreadable in a car and 0.7.0 replaced it with the Haldex face;
+  oil
   pressure converted from bar to **PSI** (`Cluster_2` `0x420` byte 4,
   0.1 bar/count then x 14.5038) with a new 58..290 PSI default scale; and a
   fix for the oil-temperature decode, where variable shadowing in
@@ -231,9 +272,10 @@ Last updated: 21 Nov 2026, firmware **0.6.4**.
 * **Long-run stability.** No soak test past a few minutes; PSRAM pool and
   internal RAM have not been watched over hours.
 
-## Build sizes, 0.6.3
+## Build sizes
 
-Measured with `./.venv/bin/pio run -e esp32s3` from a clean build of `v0.6.3`:
+At 0.6.3, measured with `./.venv/bin/pio run -e esp32s3` from a clean build of
+`v0.6.3`:
 
 | Resource | Used | Capacity | Note |
 |---|---|---|---|
@@ -260,6 +302,14 @@ the host checks (`tools/gmeter_test.cpp` 17/17, `tools/boot_button_test.cpp`
 The capture build (`-DGAUGE_CAPTURE=1`) temporarily raises the LVGL pool to
 1 MB because a snapshot is a full 466x466 RGB565 image. That build is only for
 UI verification; normal firmware keeps 128 KB.
+
+0.7.0 added **4,372 B** of flash and **96 B** of static RAM over 0.6.3
+(1,462,887 B / 119,000 B): the Haldex face (nine labels in place of the
+drivetrain drawing's thirty-odd objects, which it also gave back), the
+`mbedtls` HMAC-SHA256 for the command signature, the gesture classifier and
+the `/ohxkey` route. Headless `esp32dev` is 956,968 B (73.0%) flash and
+48,536 B (14.8%) RAM. Build sizes at 0.7.0: flash **1,467,259 B (22.4%)**,
+static RAM **119,096 B (36.3%)**.
 
 ## How this was checked
 

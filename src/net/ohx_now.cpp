@@ -18,8 +18,18 @@
 // be on one channel, so the AP follows this file's channel and the channel
 // is frozen while a page client is connected.
 //
-// No ESP-NOW or CAN frame is transmitted here: the gauge observes. The AP's
-// 802.11 beacons are the only RF the firmware originates.
+// This file used to receive only, and the header said so. It now carries one
+// transmission: OHX_C_MODE, a signed Haldex mode request from a tap on the
+// drive face (sendMode()). That is a deliberate change to the device's role,
+// not a slip - the gauge is a peer in the OpenHaldex system, and the rule it
+// follows is that a command exists only where the driver asked for one, on
+// one screen, and its outcome is shown rather than assumed. Nothing else
+// originates here: no CAN transmit, no repeated sending, no automatic action.
+//
+// The signature is HMAC-SHA256 keyed on the controller's access-point
+// password, which is therefore a stored setting (settings::controllerKey()).
+// An open access point means an empty key, which is a key. The gauge never
+// logs the key.
 // =====================================================================
 #include "net/ohx_now.h"
 
@@ -28,9 +38,12 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <math.h>
+#include <mbedtls/md.h>
+#include <stddef.h>
 #include <string.h>
 
 #include "app/config.h"
+#include "app/settings.h"
 #include "cannow_proto.h"
 #include "ohx_proto.h"
 
@@ -123,6 +136,28 @@ uint32_t g_lastCruiseModeMs = 0;
 volatile uint8_t g_channel = config::kFallbackChannel;
 volatile bool g_forceScan = false;
 bool g_enabled = false;
+
+// ---- the command path ------------------------------------------------
+// The controller's identity comes from the status packet it broadcasts: its
+// MAC is the frame's source and its nonce is the value the next command must
+// be signed against. Both are latched by the receive callback, in the WiFi
+// task, so they are read under the same lock as the telemetry.
+uint8_t g_ctrlMac[6] = {};
+bool g_ctrlKnown = false;
+bool g_ctrlMacNew = false;   // log it once, from poll()
+uint32_t g_lastNonce = 0;
+uint8_t g_cmdSeq = 0;        // our own counter, echoed back as ackSeq
+volatile bool g_ackValid = false;
+volatile uint8_t g_ackResult = 0;
+volatile uint8_t g_ackSeq = 0;
+uint32_t g_ackMs = 0;
+// The controller reports the last two bytes of the MAC that sent the command,
+// and ESP-NOW sends from whichever interface the peer names. We send on STA,
+// but accepting either of this board's two MACs keeps the verdict visible if
+// that ever changes: the sequence number still has to be ours.
+uint8_t g_ownMacSta[6] = {};
+uint8_t g_ownMacAp[6] = {};
+volatile bool g_ctrlKeyed = false;  // its AP has a password: sign or stay quiet
 
 // Upper bound for hopping. 13 with no AP; the softAP can lower it.
 uint8_t g_maxChannel = config::kMaxChannel;
@@ -235,8 +270,19 @@ void handleStatus(const esp_now_recv_info_t *info, const uint8_t *data, int len)
   t.lockActualValid = (st.lockActual != OHX_NONE8);
   t.lockActual = t.lockActualValid ? st.lockActual : 0;
 
-  // Haldex lock target (requested)
-  t.lockTarget = st.lockTarget;
+  // Haldex lock target (requested). The header names no sentinel for this
+  // field, but anything above 100% is not a request the coupling could act
+  // on, so it is drawn as "--" rather than as 255%.
+  t.lockTargetValid = (st.lockTarget != OHX_NONE8 && st.lockTarget <= 100);
+  t.lockTarget = t.lockTargetValid ? st.lockTarget : 0;
+
+  // Controller flags the drive face reads.
+  t.standalone = (st.flags[0] & OHX_F0_STANDALONE) != 0;
+  t.haldexCan = (st.flags[0] & OHX_F0_HALDEX_CAN) != 0;
+  t.couplingOpen = (st.flags[1] & OHX_F1_COUPLING_OPEN) != 0;
+  t.tempProt = (st.flags[1] & OHX_F1_TEMP_PROT) != 0;
+  t.ctrlAccept = (st.flags[2] & OHX_F2_CONTROL) != 0;
+  t.keyed = (st.flags[2] & OHX_F2_KEY) != 0;
 
   taskENTER_CRITICAL(&g_mux);
   noteSender(info->src_addr);
@@ -249,6 +295,27 @@ void handleStatus(const esp_now_recv_info_t *info, const uint8_t *data, int len)
   g_lastAnyMs = now;
   g_forceScan = false;
   g_channel = ch;
+
+  // What the next command has to be signed against, and where it goes.
+  g_lastNonce = st.nonce;
+  g_ctrlKeyed = t.keyed;
+  if (!g_ctrlKnown || memcmp(g_ctrlMac, info->src_addr, 6) != 0) {
+    memcpy(g_ctrlMac, info->src_addr, 6);
+    g_ctrlKnown = true;
+    g_ctrlMacNew = true;
+  }
+
+  // The verdict on our last command rides in this packet: ackSrc is the last
+  // two bytes of the MAC that sent it, ackSeq its counter and ackResult the
+  // answer. A match on all three means this is the answer to ours.
+  if (g_cmdSeq != 0 && st.ackSeq == g_cmdSeq &&
+      ((st.ackSrc[0] == g_ownMacSta[4] && st.ackSrc[1] == g_ownMacSta[5]) ||
+       (st.ackSrc[0] == g_ownMacAp[4] && st.ackSrc[1] == g_ownMacAp[5]))) {
+    g_ackResult = st.ackResult;
+    g_ackSeq = st.ackSeq;
+    g_ackMs = now;
+    g_ackValid = true;
+  }
   taskEXIT_CRITICAL(&g_mux);
 }
 
@@ -774,6 +841,11 @@ bool begin() {
   WiFi.disconnect(false, false);
   WiFi.setSleep(false);
 
+  // Both of this board's MACs: the controller echoes the last two bytes of the
+  // MAC that signed the command, and that is how an ack is recognised as ours.
+  WiFi.macAddress(g_ownMacSta);
+  WiFi.softAPmacAddress(g_ownMacAp);
+
   // Start on the family fallback channel, then look for the anchor. The
   // channel has to be set before the async scan starts: esp_wifi_set_channel
   // returns ESP_FAIL while a scan is running.
@@ -822,6 +894,25 @@ void poll() {
   handleSerial();
   hopTick();
 
+  // One line when the MAC a command would go to changes. A mode request is
+  // unicast to this address, so it belongs in the log next to the channel.
+  bool newCtrl = false;
+  uint8_t ctrl[6] = {};
+  bool keyed = false;
+  taskENTER_CRITICAL(&g_mux);
+  if (g_ctrlMacNew) {
+    g_ctrlMacNew = false;
+    newCtrl = true;
+    memcpy(ctrl, g_ctrlMac, 6);
+    keyed = g_ctrlKeyed;
+  }
+  taskEXIT_CRITICAL(&g_mux);
+  if (newCtrl) {
+    Serial.printf("[haldex] controller %02X:%02X:%02X:%02X:%02X:%02X, key %s\n",
+                  ctrl[0], ctrl[1], ctrl[2], ctrl[3], ctrl[4], ctrl[5],
+                  keyed ? "required" : "not required (open AP)");
+  }
+
   if (g_channel != g_printedChannel) {
     g_printedChannel = g_channel;
     Serial.printf("[now] channel %u\n", (unsigned)g_channel);
@@ -868,6 +959,108 @@ bool takeModeEvent() {
   g_modeEvent = false;
   taskEXIT_CRITICAL(&g_mux);
   return event;
+}
+
+// ---- the one transmission --------------------------------------------
+//
+// Build the 22-byte OhxCommand, sign everything before the hmac field with
+// HMAC-SHA256 keyed on the controller's AP password, and unicast it. This
+// mirrors OpenHaldex-S3-Dash's sendMode() line for line, because both are
+// peers of the same controller and a difference here would be a bug that only
+// shows up in one of them.
+//
+// Nothing is retried here. The controller regenerates its nonce after every
+// command it accepts, so a resend is a new command with a new signature; the
+// caller's STALE retry does that, once.
+SendResult sendMode(uint8_t mode) {
+  if (mode > 5) return SendResult::Invalid;
+  if (!g_enabled) return SendResult::NoStatus;
+
+  // Nothing to sign against until the controller has spoken: the nonce is
+  // what makes the signature single-use, and the source MAC is the peer.
+  uint8_t target[6];
+  uint32_t nonce;
+  bool keyed;
+  taskENTER_CRITICAL(&g_mux);
+  const bool known = g_ctrlKnown;
+  memcpy(target, g_ctrlMac, 6);
+  nonce = g_lastNonce;
+  keyed = g_ctrlKeyed;
+  const uint32_t lastStatus = g_lastStatusMs;
+  taskEXIT_CRITICAL(&g_mux);
+  if (!known || lastStatus == 0 ||
+      (uint32_t)(millis() - lastStatus) > 2000) {
+    return SendResult::NoStatus;
+  }
+
+  // An empty key is the key for an open access point. A passworded one with
+  // nothing stored is not something to guess at: refuse here, so the driver
+  // sees "no key" instead of a signature the controller will reject.
+  const char *key = settings::controllerKey();
+  if (keyed && key[0] == '\0') return SendResult::NoKey;
+
+  OhxCommand c = {};
+  c.h.magic[0] = OHX_MAGIC0;
+  c.h.magic[1] = OHX_MAGIC1;
+  c.h.type = OHX_T_COMMAND;
+  c.h.proto = OHX_PROTO;
+  c.nonce = nonce;
+  c.cmd = OHX_C_MODE;
+  c.arg[0] = mode;
+
+  taskENTER_CRITICAL(&g_mux);
+  c.seq = ++g_cmdSeq;
+  taskEXIT_CRITICAL(&g_mux);
+
+  uint8_t full[32];
+  const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if (md == nullptr) return SendResult::Radio;
+  mbedtls_md_hmac(md, (const uint8_t *)key, strlen(key), (const uint8_t *)&c,
+                  offsetof(OhxCommand, hmac), full);
+  memcpy(c.hmac, full, 8);
+
+  // Unicast to the controller. The broadcast peer registered at boot is for
+  // receiving; a command is a message to one car.
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, target, 6);
+  peer.channel = 0;  // the radio's current channel
+  peer.ifidx = WIFI_IF_STA;
+  peer.encrypt = false;
+  const esp_err_t perr = esp_now_add_peer(&peer);
+  if (perr != ESP_OK && perr != ESP_ERR_ESPNOW_EXIST) {
+    Serial.printf("[haldex] peer add failed: %s\n", esp_err_to_name(perr));
+    return SendResult::NoPeer;
+  }
+
+  // This command is the one the next ack can be about.
+  taskENTER_CRITICAL(&g_mux);
+  g_ackValid = false;
+  taskEXIT_CRITICAL(&g_mux);
+
+  const esp_err_t serr = esp_now_send(target, (const uint8_t *)&c, sizeof(c));
+  if (serr != ESP_OK) {
+    Serial.printf("[haldex] send failed: %s\n", esp_err_to_name(serr));
+    return SendResult::Radio;
+  }
+  return SendResult::Ok;
+}
+
+uint8_t lastSentSeq() {
+  taskENTER_CRITICAL(&g_mux);
+  const uint8_t seq = g_cmdSeq;
+  taskEXIT_CRITICAL(&g_mux);
+  return seq;
+}
+
+Ack lastAck() {
+  Ack a = {};
+  taskENTER_CRITICAL(&g_mux);
+  a.valid = g_ackValid;
+  a.result = g_ackResult;
+  a.seq = g_ackSeq;
+  a.ageMs = g_ackValid ? (uint32_t)(millis() - g_ackMs) : UINT32_MAX;
+  taskEXIT_CRITICAL(&g_mux);
+  return a;
 }
 
 Stats stats() {

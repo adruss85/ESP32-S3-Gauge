@@ -6,10 +6,23 @@ Open items for the gauge. Finished work lives in `include/version.h` and
 ## 1. Hardware and car
 
 - [ ] **Touch on the glass.** No finger has been on the panel through this
-      firmware. Confirm a tap steps the scheme once, a swipe left and a swipe
-      right each slide once, and `t` logs the corner you touched (that is the
-      mirror-flag check). Decide whether a tap should wake a dimmed screen and
-      whether the round edge should reject touches outside the circle.
+      firmware. 0.7.0 made the scheme a 550 ms hold and gave the tap a job on
+      the Haldex screen only, but the two thresholds (12 px of movement for a
+      tap, 46 px of travel for a swipe) are geometry, not measurements.
+      Confirm: a hold steps the scheme once and its release adds nothing; a
+      swipe never does; a tap on the Haldex screen sends one mode request and
+      a tap elsewhere does nothing but log `[ui] touch tap (ignored)`; and `t`
+      logs the corner you touched (that is the mirror-flag check). Decide
+      whether a tap should wake a dimmed screen and whether the round edge
+      should reject touches outside the circle.
+- [ ] **The mode request on the air.** Nothing in 0.7.0 has been sent from
+      this board. Confirm a tap produces `[haldex] mode -> <name> (sent)` and
+      then `<name>: ok (ack after N ms)`, that the controller's own page shows
+      the same mode, and that the Haldex face updates on the next packet.
+      Then try: a wrong key (`wrong key`), no stored key on a passworded AP
+      (`no key`, and nothing on the air), the controller with ESP-NOW control
+      disabled (`disabled`), and both this gauge and `OpenHaldex-S3-Dash`
+      stepping at once (one of them should report `stale` and retry once).
 - [ ] **Slide animation, watched.** The 280 ms swipe push ran without a crash
       but was not watched frame by frame; check it does not tear on the glass.
 - [ ] **AMOLED burn-in.** A fixed arc, ticks and captions are lit for hours.
@@ -39,6 +52,10 @@ Open items for the gauge. Finished work lives in `include/version.h` and
       and check the readout returns to 0.00 without pressing Zero.
 - [ ] **Splash on the glass.** The framebuffer capture is clean; confirm the
       3 s rule and version label read well at the panel's real brightness.
+- [ ] **Haldex face layout.** Capture with `-DGAUGE_CAPTURE_DRIVE=1` and check
+      the two value rows sit on their captions' baseline, that `60:40` and
+      `EXPERT` are both comfortable at 48 px on the round glass, and that a
+      five-second answer line (`60:40: wrong key`) fits without clipping.
 - [ ] **Cruise-stalk accent combo.** Press Cancel + Down together on the PQ
       stalk and confirm it changes the scheme exactly once
       (`[ui] cruise combo`).
@@ -104,6 +121,14 @@ Open items for the gauge. Finished work lives in `include/version.h` and
       bytes 5-6, the rear-O2 ADC through the PST-F 1 transfer, x14.5038 to
       PSI; the 8-byte frame is required and the result is not clamped.
       Default scale 0..145 PSI. Compile-verified only.
+- [x] **Oil and coolant readout resolution (0.6.5).** Oil temp is a whole-degree
+      count, so the oil face dropped the decimal point and the tenths digit (the
+      web Live line prints whole degrees too); the arc scale stays in tenths,
+      so a 0.1 °C range from /oscale still applies. Both faces draw the last
+      packet straight, no smoothing loop: coolant's count is 0.75 °C/count,
+      three steps of the DBC's 0.25 °C grid, and oil temp is whole degrees,
+      so nothing in between is ever sent. Boost and oil pressure keep easing.
+      Compile-verified only.
 - [ ] **Mode migration for five modes.** (Old mode 1 → new mode 4 mapping.)
 - [x] **Boost scale above 25 PSI.** The scale is a setting now; the arc
       re-ranges and the numeric value is never clipped.

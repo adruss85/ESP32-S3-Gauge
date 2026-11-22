@@ -38,30 +38,35 @@ Never decide a version or cut a release before this check has passed.
 A standalone **digital boost gauge** on a **Waveshare
 ESP32-S3-Touch-AMOLED-1.75** (ESP32-S3R8, 16 MB flash, 8 MB OPI PSRAM,
 466x466 round CO5300 AMOLED over QSPI, CST9217 touch).
-It is a **receive-only display client** for the OpenHaldex family:
+It is a **display client with one control on it** for the OpenHaldex family:
 
-* boost, rpm, speed, throttle, mode from the controller's `OHX_STATUS`
-  ESP-NOW broadcast (`include/ohx_proto.h`);
+* boost, rpm, speed, throttle, mode, lock request/actual from the
+  controller's `OHX_STATUS` ESP-NOW broadcast (`include/ohx_proto.h`);
 * intake air temperature from `Engine_3` (`0x380`) in the CANN relay
   (`include/cannow_proto.h`);
 * the AP name `OpenHaldex-C6` (preferred), or the dash's own `CANv-dash`
-  (formerly `ohx-dash`), supplies the WiFi channel. Nothing is transmitted.
+  (formerly `ohx-dash`), supplies the WiFi channel.
+
+**The one thing it transmits to the car** is a signed Haldex mode request
+(`OHX_C_MODE`), sent when the driver taps the Haldex screen. That is a
+deliberate change of role from the receive-only builds and it is the only
+write path in the firmware: see hard rule 2.
 
 Stack: PlatformIO, Arduino-ESP32, LVGL 9.3, Espressif `esp_lcd`, and a
 trimmed vendor CO5300 driver. C++ in `src/`, headers in `include/`.
 
 The QMI8658 on the control I2C bus adds a **G-meter** screen: a 2D dot
 (vertical acceleration/braking, horizontal lateral), a fading 1 s tail and a
-1 s two-axis magnitude readout. It is local to the board; the car link
-stays receive-only.
+1 s two-axis magnitude readout. It is local to the board.
 
-The CST9217 touch panel is the second input: a **tap steps the colour
-scheme**, a **horizontal swipe slides to the other screen**. Also local.
+The CST9217 touch panel is the second input: a **550 ms hold steps the
+colour scheme**, a **tap asks for the next Haldex mode on the Haldex screen
+only**, and a **horizontal swipe slides to the next screen**.
 
 The gauge also runs its own always-on open AP, **CANv-gauge**, serving a
-settings page (colour scheme, boost scale, display mode, G-meter mount) and OTA
-firmware upload. The AP shares the ESP-NOW radio, so it follows the receiver's
-channel and is the only RF the firmware originates.
+settings page (colour scheme, scales, display mode, G-meter mount, the
+controller's AP password) and OTA firmware upload. The AP shares the ESP-NOW
+radio, so it follows the receiver's channel.
 
 `env:esp32s3` is the real display target. `env:esp32dev` is a headless CANN
 listener for bench work and builds without the display code.
@@ -75,7 +80,8 @@ and which assumptions the bench corrected.
 
 The **OpenHaldex-C6 controller firmware** and the **bodycan sender** are
 separate repositories. Report upstream problems, do not patch them here.
-The gauge never sends ESP-NOW or CAN traffic and never actuates the car.
+The gauge never sends CAN traffic, never actuates the coupling directly, and
+carries no command that is not a mode request (rule 2).
 
 ## Ignore these directories
 
@@ -109,8 +115,10 @@ curl -F "firmware=@.pio/build/esp32s3/firmware.bin" http://192.168.4.1/update
   ESP-NOW, the BOOT key or IAT decoding needs the board or a car. Say clearly
   what was and was not verified on hardware.
 * Host-only checks live in `tools/`: `gmeter_test.cpp` (filter, axes, average,
-  speed gate, zero) and `boot_button_test.cpp` (short/long/bounce). Build
-  commands are at the top of each file. They do not touch hardware.
+  speed gate, zero), `boot_button_test.cpp` (short/long/bounce) and
+  `gesture_test.cpp` (touch tap/hold/swipe classification, including the
+  flick that must stay silent). Build commands are at the top of each file.
+  They do not touch hardware.
 * After a build, report the RAM and flash lines (see Budgets).
 
 ### Capturing the glass without a camera
@@ -135,17 +143,28 @@ order, a wrong gap or a wrong brightness. Those still need an eye on the glass.
 `-DGAUGE_CAPTURE_GMETER=1` (with `GAUGE_CAPTURE=1`) captures the G-meter
 instead, feeding a synthetic 0.5 Hz sweep so the blob, tail and readout all
 appear. `-DGAUGE_CAPTURE_SPLASH=1` captures the boot screen at 2 s, with the
-loading rule part-filled. Use a distinct output prefix, e.g. `/tmp/gmeter`.
+loading rule part-filled. `-DGAUGE_CAPTURE_DRIVE=1` captures the Haldex face
+with a fixed `60:40` mode and a 45% request against a 38% actual; a capture
+build cannot send a mode request, because only a tap transmits. Use a distinct
+output prefix, e.g. `/tmp/gmeter`.
 
 ## Hard rules
 
 1. **Never edit `include/ohx_proto.h` or `include/cannow_proto.h`.** They are
    verbatim shared copies of the controller's headers. Refresh from upstream
    only; bump `CANN_PROTO` in every copy together.
-2. **The gauge is receive-only for the car.** Do not add ESP-NOW sends, CAN
-   transmits or any control path. It observes; the controller acts. The
-   setup AP, its HTTP responses and OTA flash writes are local to the gauge
-   and must never become a way to control the car.
+2. **The gauge has exactly one write path to the car: `OHX_C_MODE`.** A tap
+   on the Haldex screen sends a signed Haldex mode request and nothing else.
+   Do not add another command, a lock-duty request, a repeated/automatic send,
+   a CAN transmit, or a web-page mode button. The rule that replaced
+   "receive-only" is: *a command exists only where the driver deliberately
+   asked for one, on one screen, and its outcome is shown rather than
+   assumed.* Reasons to refuse a change here: it fires without a tap, it
+   sends to a peer other than the controller whose status we are listening
+   to, it hides a failure, or it signs with anything but the stored
+   controller key.
+   The setup AP, its HTTP responses and OTA flash writes are local to the
+   gauge; they configure the request and must never become a way to send one.
 3. **Unknown is `NaN`, drawn as `--`. Never substitute a fake zero.** A
    packet "no data" sentinel (e.g. `OHX_NONE16`, IAT `0xFF`) travels to the
    screen as unknown. A genuine `0` draws `0`. The web status JSON follows
@@ -171,8 +190,12 @@ loading rule part-filled. Use a distinct output prefix, e.g. `/tmp/gmeter`.
    is a `.` glyph from that subset, not a drawn circle — regenerating the face
    without `.` renders the dot as a hollow box. The `-` is why a negative scale
    minimum can be drawn.
-8. **No credentials in git.** The controller's AP password is not stored
-   here; the gauge only listens.
+8. **No credentials in git.** Two exist and neither belongs in the tree: the
+   gauge's own AP password (`-DGAUGE_AP_PASSWORD`, build flag only) and the
+   controller's AP password, which signs a mode request. The second is entered
+   on the setup page and lives in NVS under `ohxkey`; it is never printed (the
+   console says "stored" or "none"), never put in the status JSON, and never
+   echoed by `/ohxkey`'s reply.
 9. **Honesty about verification.** Bench != car. Boost has only been seen as
    `0` or the absent sentinel; IAT has only been seen on the bench with a
    CANN sender present. Do not describe those as verified in a car.
@@ -196,13 +219,19 @@ loading rule part-filled. Use a distinct output prefix, e.g. `/tmp/gmeter`.
     key is still down, and swallow its release. Do not reintroduce the old
     ISR quick-tap path: a bounce on the way into a long press would emit a
     spurious accent change.
-14. **Touch is a local input, and the two gestures are the whole vocabulary.**
-    A tap steps the scheme, a horizontal swipe slides to the other screen;
-    nothing else. Gestures are classified in `src/hal/touch.cpp` and delivered
-    through `dashboard::onGesture()`, which refuses them while the splash owns
-    the glass or a transition is in flight — a second swipe mid-slide would
-    leave a root at a stale offset. The touch controller shares the control
-    I2C bus; never re-`Wire.begin()` it with different pins.
+14. **Touch has three gestures and that is the whole vocabulary.** A hold
+    (motionless, 550 ms, fires at the threshold and swallows its release)
+    steps the scheme; a tap asks for the next Haldex mode, and only on the
+    Haldex screen; a horizontal swipe slides to the next screen. A tap must
+    never do anything on another screen: a flicked swipe that never travelled
+    46 px is what used to change the accent mid-slide, which is why the
+    classifier now also tracks the press's furthest excursion and refuses a
+    tap that wandered more than 12 px. Gestures are classified in
+    `src/hal/touch.cpp` and delivered through `dashboard::onGesture()`, which
+    refuses them while the splash owns the glass or a transition is in flight
+    — a second swipe mid-slide would leave a root at a stale offset. The touch
+    controller shares the control I2C bus; never re-`Wire.begin()` it with
+    different pins.
 15. **RGB565 goes to the panel high byte first.** LVGL renders little-endian;
     `flushCb` swaps every 16-bit pixel before `esp_lcd_panel_draw_bitmap`.
     Removing that loop is not a subtle failure: white text draws light green,
@@ -242,21 +271,24 @@ invalidated when something changes. Do not go back to per-dot objects.
 | Gauge layout, value row, ticks | `src/ui/gauge_ui.cpp`, geometry in `include/theme.h` |
 | Boost scale (min/max), tick labels | `gauge_ui::applyScale()` in `src/ui/gauge_ui.cpp` |
 | Colour schemes / BOOT short press | `src/ui/theme.cpp`, `src/hal/boot_button.cpp` (poll + 700 ms long press) |
-| Touch tap / swipe classification | `src/hal/touch.cpp`, `onGesture()` in `src/ui/dashboard.cpp` |
+| Touch hold / tap / swipe classification | `src/hal/touch.cpp`, `onGesture()` in `src/ui/dashboard.cpp` |
+| Haldex face (mode, lock req, lock act) | `src/ui/drive_ui.cpp`, geometry in that file |
+| Haldex mode request (the one send) | `sendMode()` in `src/net/ohx_now.cpp`; tap → `drive_ui::onTap()` |
+| Command key (NVS `ohxkey`) | `settings::controllerKey()` / `setControllerKey()`, `/ohxkey` in `src/net/gauge_web.cpp` |
 | Cruise stalk: Cancel+Down accent, Down-long mode | `takeSchemeEvent()` / `takeModeEvent()` in `src/net/ohx_now.cpp` |
 | Mode switch: 260 ms fade, 280 ms slide | `src/ui/dashboard.cpp`, `setMode(..., Anim)` |
 | Boot splash + 3 s loading rule | `src/ui/splash.cpp`, `src/ui/splash_img.cpp`, `assets/canvas-gauge-splash-466-base.jpg` |
 | G-meter math (gravity, axes, 1 s average) | `src/app/gmeter.cpp` |
 | QMI8658 init + burst read | `src/hal/imu.cpp` |
 | G-meter dot, tail, readout (one canvas) | `src/ui/gmeter_ui.cpp`, `include/theme.h` |
-| Persisted scheme/scale/mode/mount (NVS) | `src/app/settings.cpp` |
-| Web page, settings API, OTA, G zero | `src/net/gauge_web.cpp` |
+| Persisted scheme/scale/mode/mount/key (NVS) | `src/app/settings.cpp` |
+| Web page, settings API, OTA, G zero, key | `src/net/gauge_web.cpp` |
 | Setup AP channel policy | `hopTick()` and `setSetupAp()` in `src/net/ohx_now.cpp` |
 | Panel, QSPI, LVGL display, TE sync, pixel swap | `src/hal/display.cpp`; vendor driver `esp_lcd_co5300.c`, sequence `co5300_init.c` |
 | Touch controller (CST9217) | `src/hal/touch.cpp` |
 | ESP-NOW receive, channel scan | `src/net/ohx_now.cpp` |
 | IAT decode (`0x380` byte 1) | `handleCann()` in `src/net/ohx_now.cpp` |
-| Console keys | `handleSerial()` in `src/net/ohx_now.cpp`; `src/main.cpp` for `b`/`m`/`z`/`t`/`g`/`a` |
+| Console keys | `handleSerial()` in `src/net/ohx_now.cpp`; `src/main.cpp` for `b`/`m`/`h`/`z`/`t`/`g`/`a` |
 | Boot banner / version | `include/version.h` |
 | Board pin map | `include/board_config.h` |
 | Frame capture | `GAUGE_CAPTURE` in `src/main.cpp`, `tools/capture_frame.py` |
@@ -269,13 +301,16 @@ invalidated when something changes. Do not go back to per-dot objects.
 | Any | `pio run -e esp32s3` and `pio run -e esp32dev` succeed; report size lines |
 | Layout or colour | Capture the seven schemes (above) and inspect the PPMs; repeat with `GAUGE_CAPTURE_GMETER` for the G-meter and `GAUGE_CAPTURE_SPLASH` for the boot screen. A capture is LVGL's framebuffer, not the glass — colour order and brightness still need an eye on the panel |
 | Data path | Console `[gauge] ch=... OHX=.../s boost=ok IAT=ok cann=...` |
-| Web page | Join `CANv-gauge`, check `/`, `/api/status`, scheme/scale/mode/mount, Zero, and that all survive a reboot |
+| Web page | Join `CANv-gauge`, check `/`, `/api/status`, scheme/scale/mode/mount, Zero, the controller key field, and that all survive a reboot. `/ohxkey` must never echo the key back |
 | OTA | `curl -F firmware=@.pio/build/esp32s3/firmware.bin http://192.168.4.1/update`, then confirm the boot log and the new build |
 | BOOT key | Short press: `[ui] accent <name>` once. 700 ms hold: `[ui] mode g-meter`; release must not also step the scheme |
-| Touch | Tap: `[ui] touch tap` + one scheme step. Swipe left/right: `[ui] touch swipe left|right` + one 280 ms slide. `t` logs the mapped point, which is how the mirror flags are checked: touch a known corner and read it |
+| Touch | Hold (550 ms, still): `[ui] touch hold` + one scheme step, and the release must add nothing. Tap on the Haldex screen: `[ui] touch tap` + `[haldex] mode -> ...`; on any other screen `[ui] touch tap (ignored)`. A flick-and-return and a press that wanders >12 px must produce no tap at all. Swipe left/right: `[ui] touch swipe left|right` + one 280 ms slide. `t` logs the mapped point, which is how the mirror flags are checked: touch a known corner and read it |
+| Haldex face | Capture with `-DGAUGE_CAPTURE_DRIVE=1`; on the glass, `LOCK REQ`/`LOCK ACT` must show `--` with the controller off and real percentages with it on. Tap → `[haldex] mode -> <name> (sent)`, then `[haldex] mode <name>: ok (ack after N ms)`, and the mode line must change on the next packet. A wrong key must read `wrong key`, not `no reply` |
+| Mode request | `[haldex] controller <mac>, key required|not required` once per controller. With the AP passworded and nothing stored: `[haldex] mode <name>: controller needs a key, none stored`, and no frame on the air (watch the controller's own page). With `/ohxkey` clearing the field: `[set] controller key cleared` |
 | Cruise stalk | Cancel+Down: `[ui] cruise combo` + one scheme step. Down long alone: `[ui] cruise mode` + one screen switch |
 | G-meter | At rest `g` prints `avg=0.00 valid=1` and `/api/status` has `g100:0`; tilt the board to see the blob move; acceleration must move it up, braking down. In a car, use Flip if reversed |
 | G-meter math | `tools/gmeter_test.cpp` passes: 0.5 g signs, diagonal 0.707, speed gate, tilt re-learn, auto mount, Zero |
+| Touch classification | `tools/gesture_test.cpp` passes: still press -> Tap, 8 px jitter -> Tap, 550 ms dwell -> Hold at the threshold with its release swallowed, 60 px drag -> Swipe, 30 px flick (out and back, or one way) -> nothing, double report inside the guard -> nothing |
 | Channel behaviour | Console scan lines; `s`/`r` forces a rescan, `i` prints counters |
 | Absent values | Power the controller off: boost/IAT must become `--` on the glass and `null` in `/api/status`. With no IMU, the G readout stays `-- g` and Zero does not fake 0.00 |
 | Scheme migration | Boot a board that had a 1.85 scheme stored: `[set] scheme <old> -> <new> (1.85 order to dash order)` once, then the same colour. A fresh board has no `scheme` key and must come up Midnight, not Green |
@@ -384,12 +419,38 @@ invalidated when something changes. Do not go back to per-dot objects.
   joined); the 15 s full scan finds the controller's AP by name. A connected
   page client freezes the channel even against a forced scan.
 * Settings live in NVS namespace `gauge`, keys `scheme`, `skver`, `smin`,
-  `smax`, `mode`, `gmount`, `gflip`, all written with `putInt` and read with
-  `getInt`. `getUChar` rejects the four-byte record and silently returns the
-  default. `skver` is 2; a stored `scheme` from the 1.85 build is migrated
+  `smax`, `mode`, `gmount`, `gflip`, `omin`, `omax`, `omin10p`, `omax10p`,
+  `cmin10`, `cmax10`, `ohxkey`. The first twelve are written with `putInt` and
+  read with `getInt`; `getUChar` rejects the four-byte record and silently
+  returns the default. `ohxkey` is the one `putString` and is the controller's
+  AP password. `skver` is 2; a stored `scheme` from the 1.85 build is migrated
   once through `{2,1,6,3,5,4}` (green/orange/red/blue/white/purple to the
   seven-scheme order), and `Preferences::isKey()` is what keeps a fresh board
   on Midnight instead of migrating a default.
+* **The mode request is the only frame the gauge originates (0.7.0).** It is
+  `OhxCommand` (22 B): type 2, `OHX_C_MODE`, `arg0` = 0..5, HMAC-SHA256 over
+  bytes 0..13 with the first 8 bytes kept as the signature, keyed on the
+  controller's AP password (`""` for an open AP). The nonce is the one in the
+  newest status, so a command is single-use; the controller regenerates it
+  after every command it accepts. The send is a unicast to the MAC that
+  broadcast that status, added as an ESP-NOW peer on `WIFI_IF_STA` with
+  `channel = 0`. No retries here — `drive_ui` retries once, silently, and only
+  on `OHX_R_STALE` (the dash or the controller's page spending the nonce
+  first). The verdict never comes back unicast: it rides in the next
+  `OHX_STATUS`'s `ackSrc[2]`/`ackSeq`/`ackResult`, matched on our own last two
+  MAC bytes and our own sequence number. Reference implementation:
+  `OpenHaldex-S3-Dash`'s `ohx_now.cpp::sendMode()`; the two must not drift.
+  There is **no lock-duty opcode** in v1 — `lockTarget` is read-only — so a
+  lock request cannot be commanded from either device.
+* Requirement for a send: a status within the last **2000 ms** and a stored
+  key if the controller's flags say `OHX_F2_KEY`. A keyed controller with an
+  empty key is refused locally (`no key`) rather than signed wrongly.
+  `OHX_F2_CONTROL` is not a gate: the request goes out and the controller's
+  `disabled` answer is what the driver sees, because a wrong local decode of
+  that flag would otherwise make the control silently dead.
+* The Haldex face draws the request in the scheme's text colour and the actual
+  engagement in cyan `0x22D3EE` — the same value `OpenHaldex-S3-Dash` uses, so
+  the two screens cannot disagree about which number is which.
 * OTA writes the inactive 6.25 MB slot and reboots; a 1.36 MB image took about
   7 s over the AP on the bench.
 * This repository is AI-generated and human-tested on one board. Qualify

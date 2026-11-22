@@ -1,88 +1,114 @@
 // =====================================================================
-// drive_ui.cpp - drivetrain visualisation face
+// drive_ui.cpp - the Haldex face
 //
-// Simplified graphical view for 466x466 round display.
-// Shows: chassis outline, front/rear drive lines, engine RPM,
-// front/rear diffs, Haldex pack with fill (actual %) and request line,
-// four wheels with animated treads.
-// Only text: RPM and Haldex actual %.
+// Mode, lock request, lock actual. That is the whole screen: the drivetrain
+// drawing it replaced (chassis, driveshafts, wheel treads, diff dots) could
+// not be read on the glass in a car, and what the driver was actually
+// looking for were these three numbers.
+//
+// The vocabulary matches OpenHaldex-S3-Dash's HALDEX panel - the same six
+// mode names, the coupling state as the line under the mode, the request in
+// the scheme's text colour and the actual engagement in cyan - so the two
+// screens on the same car cannot disagree about what a word means.
+//
+// A tap here asks the controller for the next mode, which is the only thing
+// this firmware transmits. The request goes out over ESP-NOW and the
+// controller's verdict comes back in the ack fields of its next status
+// broadcast, never as a reply, so the sub-line is where that verdict lands:
+// a control whose only feedback is a number that may not have moved is not a
+// control.
 // =====================================================================
 #include "ui/drive_ui.h"
 
 #include <Arduino.h>
-#include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "app/settings.h"
-#include "theme.h"
+#include "net/ohx_now.h"
 #include "ohx_proto.h"
+#include "theme.h"
 
 namespace drive_ui {
 namespace {
 
 constexpr int kW = 466;
 constexpr int kH = 466;
-constexpr int kCenterX = kW / 2;
-constexpr int kCenterY = kH / 2;
 
-// Layout coordinates
-constexpr int kEngineBoxX = 178, kEngineBoxY = 30, kEngineBoxW = 110, kEngineBoxH = 46;
-constexpr int kFrontDiffCX = 233, kFrontDiffCY = 108, kFrontDiffR = 9;
-constexpr int kRearDiffCX = 233, kRearDiffCY = 358, kRearDiffR = 11;
-constexpr int kHaldexBoxX = 199, kHaldexBoxY = 208, kHaldexBoxW = 68, kHaldexBoxH = 50;
-constexpr int kHaldexFillW = 58;
-constexpr int kHaldexFillHMax = 40;
-constexpr int kHaldexReqLineY = 253;
+// The mode names and their order are the controller's own (OHX_C_MODE arg0,
+// openhaldex_mode_t). S3-Dash draws the same six strings.
+constexpr uint8_t kModeCount = 6;
+const char *const kModeNames[kModeCount] = {"STOCK", "FWD",     "50:50",
+                                           "60:40", "75:25", "EXPERT"};
 
-// Wheel positions
-constexpr int kWheelW = 30, kWheelH = 60;
-struct WheelPos { int x, y; };
-const WheelPos kWheelPos[4] = {
-    {130, 78},   // FL
-    {306, 78},   // FR
-    {130, 328},  // RL
-    {306, 328},  // RR
-};
+constexpr uint32_t kAckWaitMs = 1500;     // sent, no answer: stop waiting
+constexpr uint32_t kResultHoldMs = 5000;  // how long the answer stays up
+
+// Absolute layout for the 466 px round glass. Everything is a plain label:
+// there is no canvas and nothing animates, so a value change invalidates one
+// small label and nothing else.
+//
+// The value boxes sit above their captions because the 48 px face has a deeper
+// baseline than the 20 px one: montserrat_48 is 52/9 and montserrat_20 is 22/4
+// (line height / baseline from the bottom), so the value box goes 25 px above
+// the caption box to put the number and "LOCK REQ" on one line.
+constexpr int kCaptionY = 74;
+constexpr int kModeY = 100;
+constexpr int kSubY = 164;
+constexpr int kRuleY = 190;
+constexpr int kReqValueY = 202;
+constexpr int kReqLabelY = 227;
+constexpr int kActValueY = 280;
+constexpr int kActLabelY = 305;
+constexpr int kHintY = 384;
 
 lv_obj_t *g_root = nullptr;
-lv_obj_t *g_chassis = nullptr;
-lv_obj_t *g_frontLines[3] = {nullptr};
-lv_obj_t *g_rearLines[4] = {nullptr};
-lv_obj_t *g_engineBox = nullptr;
-lv_obj_t *g_rpmLabel = nullptr;
-lv_obj_t *g_frontDiff = nullptr;
-lv_obj_t *g_rearDiff = nullptr;
-lv_obj_t *g_haldexBox = nullptr;
-lv_obj_t *g_haldexFill = nullptr;
-lv_obj_t *g_haldexReqLine = nullptr;
-lv_obj_t *g_haldexPctLabel = nullptr;  // actual % inside haldex box
-lv_obj_t *g_wheelRect[4] = {nullptr};
-lv_obj_t *g_wheelRing[4] = {nullptr};
-lv_obj_t *g_wheelTread[4] = {nullptr};
+lv_obj_t *g_caption = nullptr;
+lv_obj_t *g_mode = nullptr;
+lv_obj_t *g_sub = nullptr;
+lv_obj_t *g_rule = nullptr;
+lv_obj_t *g_reqCap = nullptr;
+lv_obj_t *g_reqVal = nullptr;
+lv_obj_t *g_actCap = nullptr;
+lv_obj_t *g_actVal = nullptr;
+lv_obj_t *g_hint = nullptr;
 
 uint8_t g_masterOpa = 255;
 bool g_ready = false;
 int g_slideX = 0;
 
-// Tread animation state
-float g_treadPhase[4] = {0};
-uint32_t g_lastTreadUpdate = 0;
+// What the last update() was told, so a tap steps from the mode on the glass
+// rather than from a fresh read of the radio.
+int g_modeShown = -1;
+bool g_standalone = false;
 
-// Colors
-lv_color_t col_fg() { return theme::fg(); }
-lv_color_t col_dim() { return theme::dim(); }
-lv_color_t col_green() { return lv_color_hex(0x22C55E); }
-lv_color_t col_cyan() { return lv_color_hex(0x22C0F0); }
+// Command state: one request in flight at a time. A second request would sign
+// with the nonce the first one has just spent and come back STALE.
+struct Cmd {
+  bool pending = false;
+  bool retried = false;
+  uint8_t want = 0;
+  bool haveResult = false;
+  uint8_t result = 0;
+  uint32_t sentMs = 0;
+  uint32_t resultMs = 0;
+};
+Cmd g_cmd;
+
+// Text caches. LVGL invalidates a label when its text is set, and this face is
+// refreshed at 20 Hz, so a steady reading must cost no repaint.
+char g_lastMode[12] = "";
+char g_lastReq[8] = "";
+char g_lastAct[8] = "";
+char g_lastSub[28] = "";
+uint32_t g_reqCol = 0;
+uint32_t g_actCol = 0;
+uint32_t g_lastSubCol = 0;
+
+lv_color_t col_cyan() { return lv_color_hex(0x22D3EE); }
 lv_color_t col_amber() { return lv_color_hex(0xF59E0B); }
+lv_color_t col_green() { return lv_color_hex(0x22C55E); }
 lv_color_t col_red() { return lv_color_hex(0xEF4444); }
-lv_color_t col_bg() { return lv_color_hex(0x000000); }
-lv_color_t col_chassis() { return lv_color_hex(0x14171C); }
-lv_color_t col_struct() { return lv_color_hex(0x23272E); }
-lv_color_t col_panel() { return lv_color_hex(0x101318); }
-lv_color_t col_panelStroke() { return lv_color_hex(0x2C323A); }
-lv_color_t col_tread() { return lv_color_hex(0x3F454D); }
-lv_color_t col_ring() { return lv_color_hex(0x3A4048); }
-lv_color_t col_chipBg() { return lv_color_hex(0x14171C); }
 
 void plain(lv_obj_t *obj) {
   lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
@@ -92,255 +118,128 @@ void plain(lv_obj_t *obj) {
   lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE);
 }
 
+lv_obj_t *makeLabel(lv_obj_t *parent, const lv_font_t *font, lv_color_t colour,
+                    const char *text, int letterSpace) {
+  lv_obj_t *l = lv_label_create(parent);
+  lv_label_set_text(l, text);
+  lv_obj_set_style_text_font(l, font, 0);
+  lv_obj_set_style_text_color(l, colour, 0);
+  if (letterSpace != 0) lv_obj_set_style_text_letter_space(l, letterSpace, 0);
+  return l;
+}
+
+// Set the text only when it actually changed; returns true if it did.
+bool setCached(lv_obj_t *obj, char *cache, size_t len, const char *text) {
+  if (strncmp(cache, text, len) == 0) return false;
+  strncpy(cache, text, len - 1);
+  cache[len - 1] = '\0';
+  lv_label_set_text(obj, text);
+  return true;
+}
+
+void setColour(lv_obj_t *obj, lv_color_t c, uint32_t &cache) {
+  const uint32_t u = lv_color_to_u32(c);
+  if (u == cache) return;
+  cache = u;
+  lv_obj_set_style_text_color(obj, c, 0);
+}
+
+const char *ackText(uint8_t r) {
+  switch (r) {
+    case OHX_R_OK: return "ok";
+    case OHX_R_STALE: return "stale";
+    case OHX_R_AUTH: return "wrong key";
+    case OHX_R_DISABLED: return "disabled";
+    case OHX_R_MOVING: return "car moving";
+    case OHX_R_NO_HALDEX: return "no haldex";
+    case OHX_R_BUSY: return "busy";
+    case OHX_R_INVALID: return "invalid";
+    case OHX_R_UNSUPPORTED: return "unsupported";
+    case OHX_R_CTRL_OFF: return "control off";
+    case ohxnow::kAckNoLink: return "no link";
+    case ohxnow::kAckNoKey: return "no key";
+    case ohxnow::kAckNoReply: return "no reply";
+    default: return "send failed";
+  }
+}
+
+lv_color_t ackColour(uint8_t r) {
+  if (r == OHX_R_OK) return col_green();
+  if (r == ohxnow::kAckNoLink || r == ohxnow::kAckNoReply) return COL_DIM;
+  return col_red();
+}
+
+// The line under the mode: the controller's answer for a few seconds after a
+// request lands, otherwise what the coupling is doing.
+void subLine(const char *text) {
+  setCached(g_sub, g_lastSub, sizeof(g_lastSub), text);
+}
+
+void subColour(lv_color_t c) { setColour(g_sub, c, g_lastSubCol); }
+
 void applyScheme() {
   if (!g_ready) return;
 
-  const lv_color_t fg = col_fg();
-  const lv_color_t dim = col_dim();
-  const lv_color_t accent = theme::accent();
+  lv_obj_set_style_text_color(g_caption, theme::dim(), 0);
+  lv_obj_set_style_text_color(g_reqCap, theme::dim(), 0);
+  lv_obj_set_style_text_color(g_actCap, theme::dim(), 0);
+  lv_obj_set_style_text_color(g_hint, theme::dim(), 0);
+  lv_obj_set_style_bg_color(g_rule, theme::line(), 0);
 
-  // Update text colors to follow the current scheme
-  if (g_engineBox) {
-    lv_obj_t *engLabel = lv_obj_get_child(g_engineBox, 0);
-    if (engLabel) lv_obj_set_style_text_color(engLabel, dim, 0);
-  }
-  if (g_rpmLabel) lv_obj_set_style_text_color(g_rpmLabel, fg, 0);
-  if (g_haldexPctLabel) lv_obj_set_style_text_color(g_haldexPctLabel, fg, 0);
-
-  // Request line uses accent
-  if (g_haldexReqLine) lv_obj_set_style_bg_color(g_haldexReqLine, accent, 0);
+  // The three values carry a state colour as well as a scheme colour, so they
+  // are repainted here from the state the last update() left behind, and the
+  // caches are dropped so the next pass can set them again.
+  lv_obj_set_style_text_color(
+      g_mode, g_modeShown >= 0 ? theme::accent() : theme::dim(), 0);
+  lv_obj_set_style_text_color(g_reqVal, theme::fg(), 0);
+  lv_obj_set_style_text_color(g_actVal, col_cyan(), 0);
+  g_reqCol = 0;
+  g_actCol = 0;
+  g_lastSubCol = 0;
+  g_lastSub[0] = '\0';
 }
 
 void applyOpacity() {
   if (!g_ready) return;
-  const uint8_t dim = (uint8_t)(((unsigned)LV_OPA_60 * g_masterOpa) / 255u);
-  if (g_chassis) lv_obj_set_style_opa(g_chassis, g_masterOpa, 0);
-  for (int i = 0; i < 3; i++) if (g_frontLines[i]) lv_obj_set_style_opa(g_frontLines[i], g_masterOpa, 0);
-  for (int i = 0; i < 4; i++) if (g_rearLines[i]) lv_obj_set_style_opa(g_rearLines[i], g_masterOpa, 0);
-  if (g_engineBox) lv_obj_set_style_opa(g_engineBox, g_masterOpa, 0);
-  if (g_rpmLabel) lv_obj_set_style_text_opa(g_rpmLabel, g_masterOpa, 0);
-  if (g_frontDiff) lv_obj_set_style_opa(g_frontDiff, g_masterOpa, 0);
-  if (g_rearDiff) lv_obj_set_style_opa(g_rearDiff, g_masterOpa, 0);
-  if (g_haldexBox) lv_obj_set_style_opa(g_haldexBox, g_masterOpa, 0);
-  if (g_haldexFill) lv_obj_set_style_opa(g_haldexFill, g_masterOpa, 0);
-  if (g_haldexReqLine) lv_obj_set_style_opa(g_haldexReqLine, g_masterOpa, 0);
-  if (g_haldexPctLabel) lv_obj_set_style_text_opa(g_haldexPctLabel, g_masterOpa, 0);
-  for (int i = 0; i < 4; i++) {
-    if (g_wheelRect[i]) lv_obj_set_style_opa(g_wheelRect[i], g_masterOpa, 0);
-    if (g_wheelRing[i]) lv_obj_set_style_opa(g_wheelRing[i], g_masterOpa, 0);
-    if (g_wheelTread[i]) lv_obj_set_style_opa(g_wheelTread[i], g_masterOpa, 0);
+  lv_obj_t *wid[] = {g_caption, g_mode, g_sub, g_rule, g_reqCap,
+                     g_reqVal,   g_actCap, g_actVal, g_hint};
+  for (lv_obj_t *o : wid) {
+    if (o == nullptr) continue;
+    if (o == g_rule) lv_obj_set_style_bg_opa(o, g_masterOpa, 0);
+    else lv_obj_set_style_text_opa(o, g_masterOpa, 0);
   }
 }
 
-void addChassis(lv_obj_t *scr) {
-  // Chassis outline
-  g_chassis = lv_obj_create(scr);
-  lv_obj_set_size(g_chassis, 152, 418);
-  lv_obj_set_pos(g_chassis, 157, 24);
-  lv_obj_set_style_radius(g_chassis, 60, 0);
-  lv_obj_set_style_bg_opa(g_chassis, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(g_chassis, 3, 0);
-  lv_obj_set_style_border_color(g_chassis, col_chassis(), 0);
-  plain(g_chassis);
+// Has the controller answered? STALE means another sender (the dash, or the
+// controller's own page) spent the nonce first; the packet refills it every
+// 100 ms, so one silent second attempt usually wins and a second would just
+// race again.
+void resolveCommand(uint32_t now) {
+  if (!g_cmd.pending) return;
 
-  // Front drive (green, always on)
-  // Vertical: 233, 76 -> 233, 108 (height 32, width 6)
-  g_frontLines[0] = lv_obj_create(scr);
-  lv_obj_set_size(g_frontLines[0], 6, 32);
-  lv_obj_set_pos(g_frontLines[0], 230, 76);
-  lv_obj_set_style_bg_color(g_frontLines[0], col_green(), 0);
-  lv_obj_set_style_bg_opa(g_frontLines[0], LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(g_frontLines[0], 0, 0);
-  plain(g_frontLines[0]);
-
-  // Horizontal left: 233, 108 -> 162, 108 (width 71, height 6)
-  g_frontLines[1] = lv_obj_create(scr);
-  lv_obj_set_size(g_frontLines[1], 71, 6);
-  lv_obj_set_pos(g_frontLines[1], 162, 105);
-  lv_obj_set_style_bg_color(g_frontLines[1], col_green(), 0);
-  lv_obj_set_style_bg_opa(g_frontLines[1], LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(g_frontLines[1], 0, 0);
-  plain(g_frontLines[1]);
-
-  // Horizontal right: 233, 108 -> 304, 108 (width 71, height 6)
-  g_frontLines[2] = lv_obj_create(scr);
-  lv_obj_set_size(g_frontLines[2], 71, 6);
-  lv_obj_set_pos(g_frontLines[2], 233, 105);
-  lv_obj_set_style_bg_color(g_frontLines[2], col_green(), 0);
-  lv_obj_set_style_bg_opa(g_frontLines[2], LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(g_frontLines[2], 0, 0);
-  plain(g_frontLines[2]);
-
-  // Rear drive (cyan, scales with Haldex lock)
-  // Vertical upper: 233, 117 -> 233, 208 (height 91, width 3)
-  g_rearLines[0] = lv_obj_create(scr);
-  lv_obj_set_size(g_rearLines[0], 3, 91);
-  lv_obj_set_pos(g_rearLines[0], 231, 117);
-  lv_obj_set_style_bg_color(g_rearLines[0], col_cyan(), 0);
-  lv_obj_set_style_bg_opa(g_rearLines[0], LV_OPA_20, 0);
-  lv_obj_set_style_radius(g_rearLines[0], 0, 0);
-  plain(g_rearLines[0]);
-
-  // Vertical lower: 233, 258 -> 233, 347 (height 89, width 3)
-  g_rearLines[1] = lv_obj_create(scr);
-  lv_obj_set_size(g_rearLines[1], 3, 89);
-  lv_obj_set_pos(g_rearLines[1], 231, 258);
-  lv_obj_set_style_bg_color(g_rearLines[1], col_cyan(), 0);
-  lv_obj_set_style_bg_opa(g_rearLines[1], LV_OPA_20, 0);
-  lv_obj_set_style_radius(g_rearLines[1], 0, 0);
-  plain(g_rearLines[1]);
-
-  // Horizontal left: 233, 358 -> 162, 358 (width 71, height 3)
-  g_rearLines[2] = lv_obj_create(scr);
-  lv_obj_set_size(g_rearLines[2], 71, 3);
-  lv_obj_set_pos(g_rearLines[2], 162, 356);
-  lv_obj_set_style_bg_color(g_rearLines[2], col_cyan(), 0);
-  lv_obj_set_style_bg_opa(g_rearLines[2], LV_OPA_20, 0);
-  lv_obj_set_style_radius(g_rearLines[2], 0, 0);
-  plain(g_rearLines[2]);
-
-  // Horizontal right: 233, 358 -> 304, 358 (width 71, height 3)
-  g_rearLines[3] = lv_obj_create(scr);
-  lv_obj_set_size(g_rearLines[3], 71, 3);
-  lv_obj_set_pos(g_rearLines[3], 233, 356);
-  lv_obj_set_style_bg_color(g_rearLines[3], col_cyan(), 0);
-  lv_obj_set_style_bg_opa(g_rearLines[3], LV_OPA_20, 0);
-  lv_obj_set_style_radius(g_rearLines[3], 0, 0);
-  plain(g_rearLines[3]);
-}
-
-void addEngine(lv_obj_t *scr) {
-  g_engineBox = lv_obj_create(scr);
-  lv_obj_set_size(g_engineBox, kEngineBoxW, kEngineBoxH);
-  lv_obj_set_pos(g_engineBox, kEngineBoxX, kEngineBoxY);
-  lv_obj_set_style_radius(g_engineBox, 9, 0);
-  lv_obj_set_style_bg_color(g_engineBox, col_panel(), 0);
-  lv_obj_set_style_border_width(g_engineBox, 2, 0);
-  lv_obj_set_style_border_color(g_engineBox, col_panelStroke(), 0);
-  plain(g_engineBox);
-
-  lv_obj_t *engLabel = lv_label_create(g_engineBox);
-  lv_label_set_text(engLabel, "ENGINE");
-  lv_obj_set_style_text_font(engLabel, FONT_SMALL, 0);
-  lv_obj_set_style_text_color(engLabel, col_dim(), 0);
-  lv_obj_set_style_text_letter_space(engLabel, 3, 0);
-  lv_obj_align(engLabel, LV_ALIGN_TOP_MID, 0, 4);
-
-  g_rpmLabel = lv_label_create(g_engineBox);
-  lv_label_set_text(g_rpmLabel, "----");
-  lv_obj_set_style_text_font(g_rpmLabel, FONT_SMALL, 0);  // 20px
-  lv_obj_set_style_text_color(g_rpmLabel, col_fg(), 0);
-  lv_obj_align(g_rpmLabel, LV_ALIGN_CENTER, 0, 8);
-}
-
-void addDiffs(lv_obj_t *scr) {
-  // Front diff
-  g_frontDiff = lv_obj_create(scr);
-  lv_obj_set_size(g_frontDiff, kFrontDiffR * 2, kFrontDiffR * 2);
-  lv_obj_set_pos(g_frontDiff, kFrontDiffCX - kFrontDiffR, kFrontDiffCY - kFrontDiffR);
-  lv_obj_set_style_radius(g_frontDiff, kFrontDiffR, 0);
-  lv_obj_set_style_bg_color(g_frontDiff, col_panel(), 0);
-  lv_obj_set_style_border_width(g_frontDiff, 2, 0);
-  lv_obj_set_style_border_color(g_frontDiff, col_panelStroke(), 0);
-  plain(g_frontDiff);
-
-  // Rear diff
-  g_rearDiff = lv_obj_create(scr);
-  lv_obj_set_size(g_rearDiff, kRearDiffR * 2, kRearDiffR * 2);
-  lv_obj_set_pos(g_rearDiff, kRearDiffCX - kRearDiffR, kRearDiffCY - kRearDiffR);
-  lv_obj_set_style_radius(g_rearDiff, kRearDiffR, 0);
-  lv_obj_set_style_bg_color(g_rearDiff, col_panel(), 0);
-  lv_obj_set_style_border_width(g_rearDiff, 2, 0);
-  lv_obj_set_style_border_color(g_rearDiff, col_panelStroke(), 0);
-  plain(g_rearDiff);
-}
-
-void addHaldex(lv_obj_t *scr) {
-  // Haldex pack box
-  g_haldexBox = lv_obj_create(scr);
-  lv_obj_set_size(g_haldexBox, kHaldexBoxW, kHaldexBoxH);
-  lv_obj_set_pos(g_haldexBox, kHaldexBoxX, kHaldexBoxY);
-  lv_obj_set_style_radius(g_haldexBox, 7, 0);
-  lv_obj_set_style_bg_color(g_haldexBox, col_panel(), 0);
-  lv_obj_set_style_border_width(g_haldexBox, 2, 0);
-  lv_obj_set_style_border_color(g_haldexBox, col_panelStroke(), 0);
-  plain(g_haldexBox);
-
-  // Fill (actual lock) - grows from bottom
-  g_haldexFill = lv_obj_create(g_haldexBox);
-  lv_obj_set_size(g_haldexFill, kHaldexFillW, 0);
-  lv_obj_set_pos(g_haldexFill, 5, kHaldexBoxH - 5);  // bottom-left inside
-  lv_obj_set_style_radius(g_haldexFill, 5, 0);
-  lv_obj_set_style_bg_color(g_haldexFill, col_cyan(), 0);
-  lv_obj_set_style_bg_opa(g_haldexFill, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(g_haldexFill, 0, 0);
-  plain(g_haldexFill);
-
-  // Request line (horizontal) - thin rectangle at request position
-  g_haldexReqLine = lv_obj_create(g_haldexBox);
-  lv_obj_set_size(g_haldexReqLine, kHaldexBoxW + 4, 2);
-  lv_obj_set_pos(g_haldexReqLine, -2, kHaldexReqLineY - kHaldexBoxY);
-  lv_obj_set_style_bg_color(g_haldexReqLine, theme::accent(), 0);
-  lv_obj_set_style_bg_opa(g_haldexReqLine, LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(g_haldexReqLine, 0, 0);
-  plain(g_haldexReqLine);
-
-  // HALDEX label (top)
-  lv_obj_t *hLabel = lv_label_create(g_haldexBox);
-  lv_label_set_text(hLabel, "HALDEX");
-  lv_obj_set_style_text_font(hLabel, FONT_SMALL, 0);
-  lv_obj_set_style_text_color(hLabel, col_dim(), 0);
-  lv_obj_set_style_text_letter_space(hLabel, 3, 0);
-  lv_obj_align(hLabel, LV_ALIGN_TOP_MID, 0, -8);
-
-  // Actual % label (centered in the fill area)
-  g_haldexPctLabel = lv_label_create(g_haldexBox);
-  lv_label_set_text(g_haldexPctLabel, "0%");
-  lv_obj_set_style_text_font(g_haldexPctLabel, FONT_LABEL, 0);  // 26px
-  lv_obj_set_style_text_color(g_haldexPctLabel, col_fg(), 0);
-  lv_obj_align(g_haldexPctLabel, LV_ALIGN_CENTER, 0, -4);
-}
-
-void addWheels(lv_obj_t *scr) {
-  for (int i = 0; i < 4; i++) {
-    int x = kWheelPos[i].x;
-    int y = kWheelPos[i].y;
-
-    // Wheel rect background
-    g_wheelRect[i] = lv_obj_create(scr);
-    lv_obj_set_size(g_wheelRect[i], kWheelW, kWheelH);
-    lv_obj_set_pos(g_wheelRect[i], x, y);
-    lv_obj_set_style_radius(g_wheelRect[i], 6, 0);
-    lv_obj_set_style_bg_color(g_wheelRect[i], lv_color_hex(0x12151A), 0);
-    plain(g_wheelRect[i]);
-
-    // Tread container (clipped)
-    g_wheelTread[i] = lv_obj_create(g_wheelRect[i]);
-    lv_obj_set_size(g_wheelTread[i], kWheelW, kWheelH);
-    lv_obj_set_pos(g_wheelTread[i], 0, 0);
-    lv_obj_set_style_radius(g_wheelTread[i], 6, 0);
-    lv_obj_set_style_clip_corner(g_wheelTread[i], true, 0);
-    plain(g_wheelTread[i]);
-
-    // Tread rows (8 rows) - positioned relative to container
-    for (int row = -1; row < 8; row++) {
-      lv_obj_t *tread = lv_obj_create(g_wheelTread[i]);
-      lv_obj_set_size(tread, 24, 3);
-      lv_obj_set_pos(tread, 3, row * 10);  // 10px gap
-      lv_obj_set_style_radius(tread, 1, 0);
-      lv_obj_set_style_bg_color(tread, col_tread(), 0);
-      plain(tread);
+  const ohxnow::Ack a = ohxnow::lastAck();
+  if (a.valid && a.seq == ohxnow::lastSentSeq() && a.result != OHX_R_NONE) {
+    if (a.result == OHX_R_STALE && !g_cmd.retried &&
+        ohxnow::sendMode(g_cmd.want) == ohxnow::SendResult::Ok) {
+      g_cmd.retried = true;
+      g_cmd.sentMs = now;
+      return;
     }
-
-    // Ring (slip indicator - subtle border)
-    g_wheelRing[i] = lv_obj_create(scr);
-    lv_obj_set_size(g_wheelRing[i], kWheelW, kWheelH);
-    lv_obj_set_pos(g_wheelRing[i], x, y);
-    lv_obj_set_style_radius(g_wheelRing[i], 6, 0);
-    lv_obj_set_style_bg_opa(g_wheelRing[i], LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(g_wheelRing[i], 3, 0);
-    lv_obj_set_style_border_color(g_wheelRing[i], col_ring(), 0);
-    plain(g_wheelRing[i]);
+    g_cmd.pending = false;
+    g_cmd.haveResult = true;
+    g_cmd.result = a.result;
+    g_cmd.resultMs = now;
+    Serial.printf("[haldex] mode %s: %s (ack after %lu ms)\n",
+                  kModeNames[g_cmd.want], ackText(a.result),
+                  (unsigned long)a.ageMs);
+    return;
+  }
+  if ((uint32_t)(now - g_cmd.sentMs) > kAckWaitMs) {
+    g_cmd.pending = false;
+    g_cmd.haveResult = true;
+    g_cmd.result = ohxnow::kAckNoReply;
+    g_cmd.resultMs = now;
+    Serial.printf("[haldex] mode %s: no reply\n", kModeNames[g_cmd.want]);
   }
 }
 
@@ -348,7 +247,7 @@ void addWheels(lv_obj_t *scr) {
 
 void begin() {
   lv_obj_t *scr = lv_screen_active();
-  lv_obj_set_style_bg_color(scr, col_bg(), 0);
+  lv_obj_set_style_bg_color(scr, COL_BG, 0);
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -357,11 +256,34 @@ void begin() {
   lv_obj_set_pos(g_root, 0, 0);
   plain(g_root);
 
-  addChassis(g_root);
-  addEngine(g_root);
-  addDiffs(g_root);
-  addHaldex(g_root);
-  addWheels(g_root);
+  g_caption = makeLabel(g_root, FONT_TINY, theme::dim(), "HALDEX", 4);
+  lv_obj_align(g_caption, LV_ALIGN_TOP_MID, 0, kCaptionY);
+
+  g_mode = makeLabel(g_root, FONT_G, theme::accent(), "--", 0);
+  lv_obj_align(g_mode, LV_ALIGN_TOP_MID, 0, kModeY);
+
+  g_sub = makeLabel(g_root, FONT_TINY, theme::dim(), "", 0);
+  lv_obj_align(g_sub, LV_ALIGN_TOP_MID, 0, kSubY);
+
+  g_rule = lv_obj_create(g_root);
+  lv_obj_set_size(g_rule, 140, 2);
+  lv_obj_align(g_rule, LV_ALIGN_TOP_MID, 0, kRuleY);
+  lv_obj_set_style_bg_color(g_rule, theme::line(), 0);
+  lv_obj_set_style_bg_opa(g_rule, LV_OPA_COVER, 0);
+  plain(g_rule);
+
+  g_reqCap = makeLabel(g_root, FONT_SMALL, theme::dim(), "LOCK REQ", 2);
+  lv_obj_set_pos(g_reqCap, 96, kReqLabelY);
+  g_reqVal = makeLabel(g_root, FONT_G, theme::fg(), "--", 0);
+  lv_obj_align(g_reqVal, LV_ALIGN_TOP_RIGHT, -96, kReqValueY);
+
+  g_actCap = makeLabel(g_root, FONT_SMALL, theme::dim(), "LOCK ACT", 2);
+  lv_obj_set_pos(g_actCap, 96, kActLabelY);
+  g_actVal = makeLabel(g_root, FONT_G, col_cyan(), "--", 0);
+  lv_obj_align(g_actVal, LV_ALIGN_TOP_RIGHT, -96, kActValueY);
+
+  g_hint = makeLabel(g_root, FONT_TINY, theme::dim(), "TAP = NEXT MODE", 2);
+  lv_obj_align(g_hint, LV_ALIGN_TOP_MID, 0, kHintY);
 
   g_ready = true;
   applyScheme();
@@ -371,85 +293,123 @@ void begin() {
 void update(const ohxnow::Telemetry &t, const ohxnow::Stats &s) {
   if (!g_ready) return;
 
+  const uint32_t now = millis();
   const bool live = s.raw > 0 && t.statusValid;
-  const bool stale = !live;
 
-  // RPM
-  if (g_rpmLabel) {
-    if (stale || isnan(t.rpm)) {
-      lv_label_set_text(g_rpmLabel, "----");
-      lv_obj_set_style_text_color(g_rpmLabel, lv_color_hex(0x555555), 0);
-    } else {
-      char buf[16];
-      snprintf(buf, sizeof(buf), "%d", (int)(t.rpm / 10) * 10);
-      lv_label_set_text(g_rpmLabel, buf);
-      lv_obj_set_style_text_color(g_rpmLabel, col_fg(), 0);
-    }
+  resolveCommand(now);
+
+  g_standalone = t.standalone;
+  g_modeShown = (live && t.mode < kModeCount) ? (int)t.mode : -1;
+
+  // ---- mode ---------------------------------------------------------
+  const char *mode = g_modeShown >= 0 ? kModeNames[g_modeShown] : "--";
+  if (setCached(g_mode, g_lastMode, sizeof(g_lastMode), mode)) {
+    lv_obj_set_style_text_color(
+        g_mode, g_modeShown >= 0 ? theme::accent() : theme::dim(), 0);
   }
 
-  // Haldex actual fill (0-100% -> 0-40px height) and % label
-  if (g_haldexFill && g_haldexPctLabel && t.statusValid) {
-    int lockActual = t.lockActual;  // 0-100 from OHX_STATUS
-    if (lockActual < 0) lockActual = 0;
-    if (lockActual > 100) lockActual = 100;
+  // ---- lock request and actual --------------------------------------
+  // Unknown is "--", never 0: a Haldex with no CAN data reports lockActual as
+  // OHX_NONE8, and a request of 0 is a real request that must still read 0%.
+  char req[8];
+  char act[8];
+  if (live && t.lockTargetValid) snprintf(req, sizeof(req), "%u%%", (unsigned)t.lockTarget);
+  else snprintf(req, sizeof(req), "--");
+  if (live && t.lockActualValid) snprintf(act, sizeof(act), "%u%%", (unsigned)t.lockActual);
+  else snprintf(act, sizeof(act), "--");
 
-    // Fill height
-    int fillH = (lockActual * kHaldexFillHMax) / 100;
-    lv_obj_set_size(g_haldexFill, kHaldexFillW, fillH);
-    lv_obj_set_pos(g_haldexFill, 5, kHaldexBoxH - 5 - fillH);  // bottom-aligned
+  if (setCached(g_reqVal, g_lastReq, sizeof(g_lastReq), req)) g_reqCol = 0;
+  if (setCached(g_actVal, g_lastAct, sizeof(g_lastAct), act)) g_actCol = 0;
+  // setColour() is a comparison as well as a setter, so an unchanged value
+  // and an unchanged scheme both cost nothing.
+  setColour(g_reqVal, live ? theme::fg() : theme::dim(), g_reqCol);
+  setColour(g_actVal, (live && t.lockActualValid) ? col_cyan() : theme::dim(),
+            g_actCol);
 
-    // % label
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d%%", lockActual);
-    lv_label_set_text(g_haldexPctLabel, buf);
-    lv_obj_set_style_text_color(g_haldexPctLabel, col_fg(), 0);
-  }
-
-  // Haldex request line position (0-100% maps to box height)
-  if (g_haldexReqLine && t.statusValid) {
-    int lockTarget = t.lockTarget;  // 0-100 from OHX_STATUS
-    if (lockTarget < 0) lockTarget = 0;
-    if (lockTarget > 100) lockTarget = 100;
-
-    // Y position in box coordinates (0 at top, kHaldexBoxH at bottom)
-    // Request line should be at the fill level: bottom - (pct * height)
-    int reqY = kHaldexBoxH - (lockTarget * kHaldexBoxH) / 100;
-    lv_obj_set_pos(g_haldexReqLine, -2, reqY);
-  }
-
-  // Rear drive line opacity scales with lockActual
-  if (t.statusValid) {
-    int lockActual = t.lockActual;
-    if (lockActual < 0) lockActual = 0;
-    if (lockActual > 100) lockActual = 100;
-    uint8_t opa = (uint8_t)(20 + (lockActual * 200) / 100);  // 20..220
-    for (int i = 0; i < 4; i++) {
-      if (g_rearLines[i]) lv_obj_set_style_bg_opa(g_rearLines[i], opa, 0);
-    }
+  // ---- the line under the mode --------------------------------------
+  if (g_cmd.pending) {
+    char buf[28];
+    snprintf(buf, sizeof(buf), "%s: sending", kModeNames[g_cmd.want]);
+    subLine(buf);
+    subColour(col_amber());
+  } else if (g_cmd.haveResult && (uint32_t)(now - g_cmd.resultMs) <= kResultHoldMs) {
+    char buf[28];
+    snprintf(buf, sizeof(buf), "%s: %s", kModeNames[g_cmd.want],
+             ackText(g_cmd.result));
+    subLine(buf);
+    subColour(ackColour(g_cmd.result));
+  } else if (!live) {
+    subLine("NO CONTROLLER");
+    subColour(theme::dim());
+  } else if (!t.ctrlAccept) {
+    subLine("CONTROL OFF");
+    subColour(col_amber());
+  } else if (!t.haldexCan) {
+    subLine("HALDEX CAN --");
+    subColour(theme::dim());
+  } else if (t.tempProt) {
+    subLine("TEMP PROTECTION");
+    subColour(col_amber());
+  } else if (t.couplingOpen) {
+    subLine("COUPLING OPEN");
+    subColour(theme::dim());
   } else {
-    for (int i = 0; i < 4; i++) {
-      if (g_rearLines[i]) lv_obj_set_style_bg_opa(g_rearLines[i], LV_OPA_20, 0);
-    }
-  }
-
-  // Wheel tread animation (when moving)
-  if (live && !isnan(t.speed) && t.speed > 5) {
-    uint32_t now = millis();
-    if (now - g_lastTreadUpdate >= 50) {  // 20 Hz
-      g_lastTreadUpdate = now;
-      float speedFactor = t.speed / 200.0f;  // normalize
-      if (speedFactor > 1.0f) speedFactor = 1.0f;
-      for (int i = 0; i < 4; i++) {
-        g_treadPhase[i] += speedFactor * 0.5f;
-        if (g_treadPhase[i] >= 10.0f) g_treadPhase[i] -= 10.0f;  // wrap
-        // Move tread container vertically to animate
-        lv_obj_set_pos(g_wheelTread[i], 0, (int)(g_treadPhase[i] * 10.0f));
-      }
-    }
+    subLine("COUPLING CLOSED");
+    subColour(theme::dim());
   }
 }
 
-void setScheme(theme::Scheme s, bool persist = true) {
+void onTap() {
+  if (!g_ready) return;
+
+  const uint32_t now = millis();
+  if (g_cmd.pending && (uint32_t)(now - g_cmd.sentMs) < kAckWaitMs) {
+    Serial.println("[haldex] a request is already in flight");
+    return;
+  }
+
+  // Step from what the glass shows, or from the request in flight if the last
+  // one has not been answered yet, so three quick taps move three modes.
+  const int base = g_cmd.pending ? g_cmd.want : (g_modeShown >= 0 ? g_modeShown : 0);
+  uint8_t want = (uint8_t)((base + 1) % kModeCount);
+  // A standalone controller has no STOCK to fall back on: it answers a request
+  // for STOCK by staying where it is and still reports ok, so step over it.
+  if (want == 0 && g_standalone) want = 1;
+
+  g_cmd.want = want;
+  g_cmd.pending = true;
+  g_cmd.retried = false;
+  g_cmd.haveResult = false;
+  g_cmd.sentMs = now;
+
+  const ohxnow::SendResult r = ohxnow::sendMode(want);
+  if (r == ohxnow::SendResult::Ok) {
+    Serial.printf("[haldex] mode -> %s (sent)\n", kModeNames[want]);
+    return;
+  }
+
+  g_cmd.pending = false;
+  g_cmd.haveResult = true;
+  g_cmd.resultMs = now;
+  switch (r) {
+    case ohxnow::SendResult::NoKey:
+      g_cmd.result = ohxnow::kAckNoKey;
+      Serial.printf("[haldex] mode %s: controller needs a key, none stored\n",
+                    kModeNames[want]);
+      break;
+    case ohxnow::SendResult::NoStatus:
+      g_cmd.result = ohxnow::kAckNoLink;
+      Serial.printf("[haldex] mode %s: no fresh OHX_STATUS to send to\n",
+                    kModeNames[want]);
+      break;
+    default:
+      g_cmd.result = ohxnow::kAckNoLink;
+      Serial.printf("[haldex] mode %s: send failed\n", kModeNames[want]);
+      break;
+  }
+}
+
+void setScheme(theme::Scheme s, bool persist) {
   theme::setScheme(s);
   if (persist) settings::setScheme((uint8_t)theme::scheme());
   applyScheme();
