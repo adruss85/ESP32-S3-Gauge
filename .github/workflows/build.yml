@@ -62,14 +62,21 @@ jobs:
       # One release step, one asset per build. softprops defaults to
       # overwrite_files: true, so two steps both uploading "firmware.bin"
       # silently replace each other - that is how v0.6.4 shipped the esp32dev
-      # image under the S3's name. Rename each asset explicitly.
+      # image under the S3's name. It has no per-file rename syntax either, so
+      # stage the artifacts under their final names and upload the directory.
+      - name: Stage release assets
+        run: |
+          set -eu
+          mkdir -p dist
+          cp .pio/build/esp32s3/firmware.bin "dist/ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.bin"
+          cp .pio/build/esp32s3/firmware.factory.bin "dist/ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.factory.bin"
+          ls -l dist
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
-          files: |
-            .pio/build/esp32s3/firmware.bin#ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.bin
-            .pio/build/esp32s3/firmware.factory.bin#ESP32-S3-Gauge-${{ steps.ver.outputs.version }}.factory.bin
+          files: dist/*.bin
           body: |
             ESP32-S3 Gauge firmware for Waveshare ESP32-S3-Touch-AMOLED-1.75.
 
